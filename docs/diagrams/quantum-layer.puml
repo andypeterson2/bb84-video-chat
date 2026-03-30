@@ -1,0 +1,88 @@
+@startuml quantum-layer
+!include style.puml
+
+title BB84 Quantum Layer — Component Diagram
+
+package "shared/bb84/" {
+    component [PhysicalLayerSimulator] as PLS {
+        component [PhotonSource] as PS
+        component [QuantumChannel] as QC
+        component [SinglePhotonDetector] as SPD
+    }
+
+    component [BB84Protocol] as Proto {
+        component [Sifting] as Sift
+        component [QBER Estimation] as QBER
+        component [Cascade\nError Correction] as Cascade
+        component [Toeplitz\nPrivacy Amplification] as PA
+    }
+
+    component [EavesdropperSimulator] as Eve
+    component [QBERMonitor] as Monitor
+    component [AbstractHardwareBridge] as Bridge
+    component [MATLABBridge] as MATLAB
+    component [QiskitValidator] as Qiskit
+}
+
+package "shared/" {
+    component [BB84KeyGenerator] as KG
+    component [HardwareKeyGenerator] as HKG
+    component [Encryption Registry] as Reg
+}
+
+package "server/utils/" {
+    component [AV\n(Key Rotation)] as AV
+}
+
+package "server/" {
+    component [SocketAPI\n(qber-update)] as Socket
+    component [AdminRoutes\n(quantum metrics)] as Admin
+}
+
+' Physical layer flow
+PS --> QC : photon pulses
+QC --> SPD : surviving photons
+Eve ..> QC : intercept-resend\n(optional)
+
+' Protocol flow
+PLS --> Proto : detection events
+Sift --> QBER
+QBER --> Cascade
+Cascade --> PA
+
+' Key generator
+Proto --> KG : BB84RoundResult
+KG --> Reg : register('BB84')
+KG --> Monitor : metrics callback
+KG --> AV : key bytes
+
+' Hardware path
+Bridge <|-- MATLAB
+HKG --> Bridge : get_raw_key_material()
+HKG --> KG : fallback
+
+' Server wiring
+AV --> Socket : qber event callback
+Monitor --> Admin : get_summary()
+Monitor --> Admin : get_history()
+
+' Qiskit validation
+Qiskit ..> Proto : validate protocol\ncorrectness
+
+note bottom of PLS
+  Models realistic optical chain:
+  • Poisson photon statistics (μ ≈ 0.1)
+  • Fiber attenuation (0.2 dB/km)
+  • Detector efficiency (10%)
+  • Dark counts, afterpulsing, jitter
+end note
+
+note bottom of Monitor
+  Classifies each round:
+  • NORMAL (QBER < 5%)
+  • WARNING (5-11%)
+  • INTRUSION (> 11%)
+  Triggers re-keying on intrusion
+end note
+
+@enduml

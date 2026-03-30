@@ -1,0 +1,90 @@
+' Quantum Video Chat — Unified Diagram Style
+' Include this at the top of every .puml file:
+'   !include style.puml
+
+!theme plain
+skinparam backgroundColor transparent
+skinparam defaultFontName "Segoe UI, Helvetica, Arial, sans-serif"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam padding 6
+
+' ── Palette ──────────────────────────────────────
+!$BG        = "#F8F9FA"
+!$BORDER    = "#ADB5BD"
+!$TEXT      = "#212529"
+!$ARROW     = "#495057"
+!$NOTE_BG   = "#FFF3CD"
+!$NOTE_BD   = "#FFECB5"
+!$BLUE      = "#E8F4FD"
+!$GREEN     = "#ECFDF5"
+!$RED       = "#FEF2F2"
+!$YELLOW    = "#FFFBEB"
+!$PURPLE    = "#F5F0FF"
+!$GRAY      = "#F3F4F6"
+
+' ── Global element styles ────────────────────────
+skinparam rectangle {
+    BackgroundColor $BG
+    BorderColor $BORDER
+    FontColor $TEXT
+}
+
+skinparam component {
+    BackgroundColor #FFFFFF
+    BorderColor $BORDER
+    FontColor $TEXT
+}
+
+skinparam note {
+    BackgroundColor $NOTE_BG
+    BorderColor $NOTE_BD
+    FontColor $TEXT
+}
+
+skinparam package {
+    BackgroundColor $BG
+    BorderColor $BORDER
+    FontColor $TEXT
+}
+
+' ── Sequence diagram styles ──────────────────────
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+skinparam participant {
+    BackgroundColor $BG
+    BorderColor $BORDER
+    FontColor $TEXT
+}
+
+skinparam sequence {
+    ArrowColor $ARROW
+    LifeLineBorderColor #CED4DA
+    LifeLineBackgroundColor $BG
+    DividerBackgroundColor #E9ECEF
+    GroupBackgroundColor $BG
+}
+
+' ── State diagram styles ─────────────────────────
+skinparam state {
+    BackgroundColor $BG
+    BorderColor $BORDER
+    FontColor $TEXT
+    StartColor $ARROW
+    EndColor $ARROW
+    ArrowColor $ARROW
+}
+
+' ── Activity diagram styles ──────────────────────
+skinparam activity {
+    BackgroundColor $BG
+    BorderColor $BORDER
+    FontColor $TEXT
+    DiamondBackgroundColor $NOTE_BG
+    DiamondBorderColor $NOTE_BD
+}
+skinparam ActivityBarColor $ARROW
+skinparam ActivityBorderColor $BORDER
+skinparam ActivityBackgroundColor $BG

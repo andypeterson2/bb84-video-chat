@@ -1,0 +1,40 @@
+@startuml architecture
+!include style.puml
+skinparam componentStyle rectangle
+skinparam linetype ortho
+
+title Quantum Video Chat — System Architecture
+
+rectangle "Browser Frontend (React)" as frontend $BLUE {
+    component "Renderer\nStart / Join / Session\nSettings" as renderer
+}
+
+rectangle "Python Middleware" as mw $GREEN {
+    component "Client\n(orchestrator)" as client
+    component "ClientAPI\n:4000" as clientapi
+    component "SocketClient\n(WebSocket)" as socketclient
+    component "AV + Encryption\nKey Rotation" as av
+    client -down-> clientapi
+    client -down-> socketclient
+    client -down-> av
+}
+
+rectangle "Python Backend Server" as backend $RED {
+    component "ServerAPI (REST)\n:5050" as restapi
+    component "SocketAPI (WebSocket)\n:3000\n/video  /audio" as socketapi
+    component "UserManager\nUser[]" as usermgr
+    restapi -down-> usermgr
+    socketapi -down-> usermgr
+}
+
+rectangle "shared/" as shared $PURPLE {
+    component "encryption\nendpoint\nconfig\nstate\nAV namespaces" as sharedlib
+}
+
+renderer -down-> client : Socket.IO
+clientapi -right-> restapi : REST
+socketclient <-right-> socketapi : **WebSocket**\n(encrypted AV)
+mw ..> sharedlib
+backend ..> sharedlib
+
+@enduml

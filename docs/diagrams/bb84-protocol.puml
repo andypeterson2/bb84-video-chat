@@ -1,0 +1,68 @@
+@startuml bb84-protocol
+!include style.puml
+
+title BB84 Quantum Key Distribution Protocol
+
+participant "Alice\n(Sender)" as A $GREEN
+participant "Quantum Channel\n(Fiber)" as QC $YELLOW
+participant "Bob\n(Receiver)" as B $BLUE
+participant "Classical Channel\n(Authenticated)" as CC $GRAY
+
+== Step 1: Quantum Transmission ==
+
+A -> A : Generate random bits\n{0, 1, 1, 0, 1, 0, ...}
+A -> A : Choose random bases\n{+, x, +, x, x, +, ...}
+A -> QC : Encode bits as polarized photons\n(H/V for + basis, D/A for x basis)
+note right of QC : Poisson-distributed\nphoton pulses (μ ≈ 0.1)\nwith fiber attenuation
+
+QC -> B : Photons arrive at SPD
+B -> B : Choose random bases\n{x, x, +, +, x, +, ...}
+B -> B : Measure each photon\nin chosen basis
+
+== Step 2: Sifting ==
+
+B -> CC : Send Bob's basis choices
+CC -> A : (publicly visible)
+A -> CC : Send Alice's basis choices
+CC -> B : (publicly visible)
+A -> A : Keep only matching-basis bits
+B -> B : Keep only matching-basis bits
+
+note over A, B : ~50% of detected bits survive sifting
+
+== Step 3: QBER Estimation ==
+
+A -> CC : Reveal 10% sample of sifted bits
+CC -> B :
+B -> B : Compare with own bits\nCount mismatches
+B -> CC : Report QBER
+
+alt QBER > 11% (Eavesdropper Detected)
+    B -> CC : **ABORT** — key compromised
+    CC -> A :
+    A -> A : Discard key material
+    B -> B : Discard key material
+    note over A, B $RED : Restart protocol\nwith new random bits
+else QBER < 11% (Secure)
+    note over A, B $GREEN : Channel is secure\nProceed to error correction
+end
+
+== Step 4: Error Correction (Cascade) ==
+
+A -> CC : Block parities (Pass 1)
+CC -> B :
+B -> B : Compare parities\nBinary search for errors
+B -> CC : Request sub-block parities
+CC -> A :
+note over A, B : Repeat with doubled block size\nfor 4 passes
+
+== Step 5: Privacy Amplification ==
+
+A -> CC : Random Toeplitz matrix seed
+CC -> B :
+A -> A : Hash corrected key\n(removes Eve's information)
+B -> B : Hash corrected key\n(same Toeplitz matrix)
+
+note over A, B $GREEN : **Final shared key**\n128 bits, information-theoretically secure
+
+@enduml

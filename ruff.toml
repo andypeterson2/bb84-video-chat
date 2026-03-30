@@ -1,0 +1,64 @@
+# Ruff linter configuration for QVC
+
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["ALL"]
+ignore = [
+    # Incompatible rule pairs
+    "D203",    # conflicts with D211 (no-blank-line-before-class)
+    "D213",    # conflicts with D212 (multi-line-summary-first-line)
+
+    # Not applicable to this project
+    "ANN",     # type annotations (not enforced yet across codebase)
+    "INP001",  # implicit namespace package (__init__.py not required)
+    "S101",    # assert in non-test code (used intentionally)
+    "FIX002",  # line-contains-todo (TODOs are acceptable)
+    "TD002",   # missing-todo-author
+    "TD003",   # missing-todo-link
+
+    # Overly strict for this codebase
+    "D100",    # undocumented public module
+    "D104",    # undocumented public package
+    "ERA001",  # commented-out code (region markers)
+]
+
+[lint.per-file-ignores]
+"tests/**" = [
+    "D",       # docstring rules relaxed in tests
+    "S",       # security rules relaxed in tests
+    "SLF001",  # private member access (testing internals)
+    "PLR2004", # magic values in assertions
+    "PT009",   # pytest unittest assertion (mixed test styles)
+    "PT011",   # pytest.raises too broad
+    "ARG",     # unused arguments (fixtures, callbacks)
+    "B017",    # assert raises Exception
+    "N",       # naming conventions relaxed
+    "T201",    # print in tests
+    "F811",    # redefined fixture names
+    "E501",    # line length in tests
+    "RUF059",  # unused unpacked variables
+    "PLC0415", # import outside top level
+    "PERF203", # try-except in loop
+    "C901",    # complex structure in tests
+    "PLR0913", # too many arguments
+    "FBT",     # boolean args in tests
+    "BLE001",  # broad exception in tests
+    "SIM105",  # contextlib.suppress suggestion
+    "UP036",   # version block outdated
+]
+# Middleware is legacy code being replaced by signaling/ — relax strict rules
+"middleware/**" = [
+    "E402", "PLC0415", "PLR0915", "PLR2004", "C901",
+    "SLF001", "BLE001", "N806", "S310", "TRY",
+    "EM102", "FBT",
+]
+"server/rest_api.py" = ["E402", "PLC0415"]  # sys.path before imports
+"server/main.py" = ["E402"]
+"server/admin_routes.py" = ["E402"]
+"tests/conftest.py" = ["E402"]
+"signaling/main.py" = ["E402"]      # sys.path before imports
+
+[lint.pydocstyle]
+convention = "google"

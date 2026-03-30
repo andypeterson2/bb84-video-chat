@@ -1,0 +1,17 @@
+services:
+  signaling:
+    container_name: signaling
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "127.0.0.1:${QVC_SERVER_PORT}:${QVC_SERVER_PORT}"
+    environment:
+      QVC_SERVER_REST_PORT: "${QVC_SERVER_PORT}"
+      QVC_HOST: "0.0.0.0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${QVC_SERVER_PORT}/admin/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

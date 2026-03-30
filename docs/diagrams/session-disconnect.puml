@@ -1,0 +1,42 @@
+@startuml session-disconnect
+!include style.puml
+
+title Session Disconnect Flow
+
+participant "Initiator\n(Browser)" as init
+participant "Initiator\nMiddleware" as initmw
+participant "Backend\nServer" as server
+participant "Peer\nMiddleware" as peermw
+participant "Peer\n(Browser)" as peer
+
+init -> initmw : disconnect()\nvia Socket.IO
+activate initmw
+
+initmw -> initmw : stop key rotation\n(_key_stop.set())
+initmw -> initmw : SocketClient.disconnect()
+
+initmw -> server : POST /disconnect_peer\n{user_id}
+activate server
+
+server -> server : set user → IDLE\nset peer → IDLE
+
+server -> peermw : POST /peer_disconnected\n{peer_id}
+activate peermw
+peermw -> peermw : stop key rotation
+peermw -> peermw : SocketClient.disconnect()
+peermw -> peer : status: peer_disconnected
+peermw --> server : 200 OK
+deactivate peermw
+
+server --> initmw : 200 OK
+deactivate server
+
+initmw -> init : status: peer_disconnected
+deactivate initmw
+
+note over init, peer
+  Both clients return to LIVE state,
+  ready for a new call.
+end note
+
+@enduml

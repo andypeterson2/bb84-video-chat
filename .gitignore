@@ -1,0 +1,27 @@
+# all hidden directories
+.*
+!.git*
+!.dashboard.yaml
+!.dockerignore
+
+__pycache__
+node_modules
+package-lock.json
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+
+# OSX
+**/.DS_Store
+
+# Project specific exclusions
+settings.ini
+settings*.ini
+**/dev_python_config.json
+key.bin

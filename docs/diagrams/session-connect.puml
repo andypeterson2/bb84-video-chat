@@ -1,0 +1,43 @@
+@startuml session-connect
+!include style.puml
+
+title Session Connection Flow
+
+participant "Host\n(Browser)" as host
+participant "Host\nMiddleware" as hostmw
+participant "Backend\nServer" as server
+participant "Peer\nMiddleware" as peermw
+participant "Peer\n(Browser)" as peer
+
+== Registration ==
+
+host -> hostmw : setPeerId(code)\nvia Socket.IO
+hostmw -> server : POST /peer_connection\n{user_id, peer_id}
+activate server
+
+server -> server : start_websocket()\nopen /video, /audio
+server -> peermw : POST /peer_connection\n{peer_id, socket_endpoint}
+activate peermw
+peermw -> peermw : connect_to_websocket()
+peermw --> server : 200 OK
+deactivate peermw
+
+server -> server : set both users\nCONNECTED
+server --> hostmw : 200 OK\n{socket_endpoint}
+deactivate server
+
+hostmw -> hostmw : connect_to_websocket()
+
+== Streaming ==
+
+hostmw -> server : WebSocket /video, /audio\n(encrypted AV frames)
+server -> peermw : broadcast to peer\n(exclude sender)
+peermw -> peer : Socket.IO 'frame' event
+hostmw -> host : Socket.IO 'self-frame' event
+
+note over host, peer
+  AES-128 keys rotate every 1 second.
+  Each frame carries a 4-byte key index prefix.
+end note
+
+@enduml

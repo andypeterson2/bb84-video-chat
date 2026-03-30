@@ -1,0 +1,28 @@
+@startuml video-pipeline
+!include style.puml
+
+title Video Frame Pipeline
+
+|$BLUE|Sender|
+start
+:OpenCV capture\n(or debug random frame);
+:H.264 encode\n(ffmpeg, ultrafast/zerolatency);
+:AES-128 encrypt\n(prepend 4-byte key_index);
+
+|$GREEN|Network|
+:WebSocket /video\n(Socket.IO binary);
+:Server broadcast\n(exclude sender);
+
+|$RED|Receiver|
+:Read 4-byte key_index;
+if (key_index matches\ncurrent key?) then (yes)
+    :AES-128 decrypt;
+    :H.264 decode\n(ffmpeg rawvideo);
+    :Socket.IO 'frame' event\n(Middleware → Browser);
+    :Canvas drawImage();
+else (no)
+    :Drop frame\n(stale key);
+endif
+stop
+
+@enduml

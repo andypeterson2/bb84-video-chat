@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main, refactor]
+  pull_request:
+    branches: [main]
+
+env:
+  QVC_DEVELOPMENT: 'true'
+
+jobs:
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install linting tools
+        run: pip install ruff
+
+      - name: Run ruff check
+        run: ruff check signaling/ tests/signaling/
+
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r signaling/requirements.txt
+          pip install pytest pytest-timeout
+
+      - name: Run signaling tests
+        run: |
+          python -m pytest tests/signaling/ \
+            -v --tb=short --timeout=60
+
+  js-tests:
+    name: JS Tests (Vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install JS dependencies
+        run: npm install
+
+      - name: Run JS tests
+        run: npx vitest run
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build signaling server image
+        run: docker build -f Dockerfile.server -t qvc-signaling .
+
+      - name: Verify server starts
+        run: |
+          docker run -d --name qvc-signaling-test \
+            -e QVC_SERVER_REST_PORT=5050 \
+            -e QVC_HOST=0.0.0.0 \
+            -e SIO_ASYNC_MODE=eventlet \
+            -p 5050:5050 qvc-signaling
+          sleep 5
+          curl -sf http://localhost:5050/admin/status || (docker logs qvc-signaling-test && exit 1)
+          docker stop qvc-signaling-test

@@ -1,0 +1,78 @@
+@startuml bb84-intrusion
+!include style.puml
+
+title BB84 Eavesdropper Detection & Key Redistribution
+
+participant "Alice\n(Sender)" as A $GREEN
+participant "Eve\n(Eavesdropper)" as E $RED
+participant "Bob\n(Receiver)" as B $BLUE
+participant "QBERMonitor" as M $YELLOW
+participant "Video Stream" as V $GRAY
+
+== Normal Operation (No Eavesdropper) ==
+
+A -> B : Quantum key exchange\n(QBER ≈ 2-4%)
+M -> M : Record QBER: NORMAL
+V -> V : Video encrypted with\ncurrent key (AES-128)
+
+note over A, V $GREEN : Key rotates every 3 seconds\nVideo continues uninterrupted
+
+== Eve Begins Intercept-Resend Attack ==
+
+A -[#DC2626]> E : Alice sends photon\n(encoded in basis +)
+E -> E : Measure in random basis\n(50% chance of wrong basis)
+E -[#DC2626]> B : Re-send photon\n(may be in wrong state)
+
+note over E $RED : When Eve's basis ≠ Alice's basis:\nBob gets random bit → ~25% error
+
+== QBER Rises ==
+
+B -> M : Report QBER: 0.08
+M -> M : Classify: **WARNING**
+M -> V : Emit warning event\n(yellow indicator)
+
+B -> M : Report QBER: 0.15
+M -> M : Classify: **WARNING**
+
+B -> M : Report QBER: 0.24
+M -[#DC2626]> M : Classify: **INTRUSION DETECTED**\nQBER (24%) > threshold (11%)
+
+== Key Rejection ==
+
+M -[#DC2626]> V : Emit intrusion_detected event
+note over V $YELLOW : Dashboard shows red alert\nQBER chart spikes
+
+M -> A : **ABORT** current key round
+M -> B : **ABORT** current key round
+
+note over A, B $RED : Key material discarded\nOld key remains in use
+
+== Automatic Re-Keying ==
+
+A -> B : Retry key exchange\n(0.5s retry interval)
+
+alt Eve Still Present
+    A -[#DC2626]> E : Photon intercepted again
+    E -[#DC2626]> B : Re-sent
+    B -> M : QBER still > 11%
+    M -> M : **ABORT** again
+    note over M : Consecutive failures logged\nIntrusion count incremented
+else Eve Removed / Stops
+    A -> B : Clean quantum channel
+    B -> M : QBER: 0.03
+    M -> M : Classify: NORMAL
+    M -> V : Emit key_redistributed
+    note over V $GREEN : Dashboard returns to green\nNew key applied to video stream
+end
+
+== Video Stream Continuity ==
+
+note over V $GREEN
+  Throughout the intrusion event:
+  • Video stream never stops
+  • Old key continues encrypting
+  • New key applied seamlessly
+  • User sees QBER alert in dashboard
+end note
+
+@enduml

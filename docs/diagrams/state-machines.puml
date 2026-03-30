@@ -1,0 +1,54 @@
+@startuml state-machines
+!include style.puml
+
+title State Machines
+
+state "User (server-side)" as user_pkg {
+    state "IDLE" as u_idle
+    state "CONNECTED\npeer = <user_id>" as u_conn
+
+    [*] --> u_idle
+    u_idle --> u_conn : peer_connection\naccepted
+    u_conn --> u_idle : disconnect_peer\nor socket disconnect
+}
+
+state "Client (middleware)" as client_pkg {
+    state "NEW" as c_new
+    state "INIT" as c_init
+    state "LIVE" as c_live
+    state "CONNECTED" as c_conn
+
+    [*] --> c_new
+    c_new --> c_init : ClientAPI.init()
+    c_init --> c_live : connect() to server
+    c_live --> c_conn : connect_to_peer()\nor handle_peer_connection()
+    c_conn --> c_live : disconnect_from_peer()\nor handle_peer_disconnected()
+}
+
+state "Frontend — Server Status" as fe_server {
+    state "connecting" as s_conn
+    state "connected" as s_ok
+    state "error" as s_err
+
+    [*] --> s_conn
+    s_conn --> s_ok : server_connected
+    s_conn --> s_err : server_error
+}
+
+state "Frontend — Peer Status" as fe_peer {
+    state "idle" as p_idle
+    state "outgoing" as p_out
+    state "incoming" as p_in
+    state "connected" as p_conn
+    state "disconnected" as p_disc
+
+    [*] --> p_idle
+    p_idle --> p_out : connect_to_peer
+    p_idle --> p_in : peer_connection received
+    p_out --> p_conn : peer_connected
+    p_in --> p_conn : peer_connected
+    p_conn --> p_disc : peer_disconnected
+    p_disc --> p_idle : ready for new call
+}
+
+@enduml
