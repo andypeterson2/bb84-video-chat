@@ -23,9 +23,30 @@ from flask import Flask, jsonify
 from flask import request as flask_req
 from flask_cors import CORS
 
+from signaling.errors import register_error_handlers
 from signaling.rooms import RoomManager
 
 logger = logging.getLogger(__name__)
+
+SERVICE = "qvc"
+
+# Streaming channels are not in the HTTP url-map; list them by hand. The
+# encrypted media + BB84/QKD path runs peer-to-peer in the browser and is
+# the explicit live-only layer (exempt from the curl-able rule).
+_STREAMING = [
+    {"protocol": "socket.io", "event": "offer", "description": "Relay SDP offer to the room peer."},
+    {"protocol": "socket.io", "event": "answer", "description": "Relay SDP answer to the room peer."},
+    {"protocol": "socket.io", "event": "ice-candidate", "description": "Relay ICE candidate to the room peer."},
+    {"protocol": "socket.io", "event": "room-created", "description": "Room-creation result."},
+    {"protocol": "socket.io", "event": "room-joined", "description": "Room-join result (both peers)."},
+    {"protocol": "socket.io", "event": "peer-disconnected", "description": "Peer left/disconnected notification."},
+    {"protocol": "webrtc", "description": "Encrypted media + BB84/QKD run peer-to-peer in the browser; not brokered by this server."},
+]
+
+
+def _version() -> str:
+    """Service version (overridable via QVC_VERSION at deploy time)."""
+    return os.environ.get("QVC_VERSION", "0.1.0")
 
 # CORS: accept any localhost origin + production domain
 _CORS_RAW = os.environ.get(
@@ -92,6 +113,42 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     def admin_peers():
         """Return connected peers for the dashboard."""
         return jsonify({"peers": rooms.get_peers_summary()})
+
+    # ── Contract routes: health + discovery ─────────────────────────
+
+    @flask_app.get("/health")
+    def health():
+        """Liveness probe for the qvc signaling backend."""
+        return jsonify({
+            "status": "ok",
+            "service": SERVICE,
+            "version": _version(),
+            "uptime_s": round(rooms.uptime_seconds, 1),
+        })
+
+    @flask_app.get("/api")
+    def api_index():
+        """Discovery index: HTTP endpoints plus signaling/streaming channels."""
+        seen: set[tuple[str, str]] = set()
+        endpoints = []
+        for rule in flask_app.url_map.iter_rules():
+            if rule.endpoint == "static":
+                continue
+            path = str(rule)
+            view = flask_app.view_functions.get(rule.endpoint)
+            summary = ((getattr(view, "__doc__", "") or "").strip().splitlines() or [""])[0].strip()
+            for method in (rule.methods or set()) - {"HEAD", "OPTIONS"}:
+                if (method, path) in seen:
+                    continue
+                seen.add((method, path))
+                endpoints.append({"method": method, "path": path, "summary": summary})
+        endpoints.sort(key=lambda e: (e["path"], e["method"]))
+        return jsonify({
+            "service": SERVICE,
+            "version": _version(),
+            "endpoints": endpoints,
+            "streaming": _STREAMING,
+        })
 
     # ── Socket.IO events ────────────────────────────────────────────
 
@@ -183,5 +240,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
                 "candidate": data.get("candidate"),
                 "from": sid,
             }, room=other_sid)
+
+    register_error_handlers(flask_app)
 
     return flask_app, sio, rooms
