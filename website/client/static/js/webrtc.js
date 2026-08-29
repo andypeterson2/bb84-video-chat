@@ -105,10 +105,14 @@ export class WebRTCManager {
   }
 
   /** Get the current room ID. */
-  get roomId() { return this._roomId; }
+  get roomId() {
+    return this._roomId;
+  }
 
   /** Get the local MediaStream. */
-  get localStream() { return this._localStream; }
+  get localStream() {
+    return this._localStream;
+  }
 
   /* ── Signaling ───────────────────────────────────────────────── */
 

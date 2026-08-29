@@ -19,7 +19,8 @@ const APP_JS_EXISTS = existsSync(APP_JS_PATH);
 // Stub globals that app.js expects
 function setupGlobals() {
   // requestAnimationFrame polyfill for jsdom
-  globalThis.requestAnimationFrame = globalThis.requestAnimationFrame || ((cb) => setTimeout(cb, 0));
+  globalThis.requestAnimationFrame =
+    globalThis.requestAnimationFrame || ((cb) => setTimeout(cb, 0));
   globalThis.cancelAnimationFrame = globalThis.cancelAnimationFrame || ((id) => clearTimeout(id));
 
   // Socket.IO stub
@@ -54,11 +55,21 @@ function setupGlobals() {
       this.iceConnectionState = 'new';
     }
     addTrack() {}
-    createOffer() { return Promise.resolve({ type: 'offer', sdp: '' }); }
-    createAnswer() { return Promise.resolve({ type: 'answer', sdp: '' }); }
-    setLocalDescription() { return Promise.resolve(); }
-    setRemoteDescription() { return Promise.resolve(); }
-    addIceCandidate() { return Promise.resolve(); }
+    createOffer() {
+      return Promise.resolve({ type: 'offer', sdp: '' });
+    }
+    createAnswer() {
+      return Promise.resolve({ type: 'answer', sdp: '' });
+    }
+    setLocalDescription() {
+      return Promise.resolve();
+    }
+    setRemoteDescription() {
+      return Promise.resolve();
+    }
+    addIceCandidate() {
+      return Promise.resolve();
+    }
     createDataChannel() {
       return { onopen: null, onmessage: null, onclose: null, close: () => {} };
     }
@@ -87,7 +98,9 @@ function setupGlobals() {
     textAlign: '',
     textBaseline: '',
   };
-  HTMLCanvasElement.prototype.getContext = function () { return canvasCtxStub; };
+  HTMLCanvasElement.prototype.getContext = function () {
+    return canvasCtxStub;
+  };
 
   // captureStream stub (for test media sources)
   HTMLCanvasElement.prototype.captureStream = function () {
@@ -98,35 +111,63 @@ function setupGlobals() {
   if (!globalThis.MediaStream) {
     globalThis.MediaStream = class MediaStream {
       #tracks;
-      constructor(tracks = []) { this.#tracks = [...tracks]; }
-      getTracks() { return this.#tracks; }
-      getVideoTracks() { return this.#tracks.filter(t => t.kind === 'video'); }
-      getAudioTracks() { return this.#tracks.filter(t => t.kind === 'audio'); }
+      constructor(tracks = []) {
+        this.#tracks = [...tracks];
+      }
+      getTracks() {
+        return this.#tracks;
+      }
+      getVideoTracks() {
+        return this.#tracks.filter((t) => t.kind === 'video');
+      }
+      getAudioTracks() {
+        return this.#tracks.filter((t) => t.kind === 'audio');
+      }
     };
   }
 
   // AudioContext stub (for test audio sources)
-  const oscStub = { type: '', frequency: { value: 0 }, connect: () => {}, start: () => {}, stop: () => {} };
+  const oscStub = {
+    type: '',
+    frequency: { value: 0 },
+    connect: () => {},
+    start: () => {},
+    stop: () => {},
+  };
   const gainStub = { gain: { value: 0 }, connect: () => {} };
   const destStub = { stream: new MediaStream() };
   globalThis.AudioContext = class AudioContext {
-    createOscillator() { return { ...oscStub }; }
-    createGain() { return { ...gainStub }; }
-    createMediaStreamDestination() { return { ...destStub }; }
-    close() { return Promise.resolve(); }
+    createOscillator() {
+      return { ...oscStub };
+    }
+    createGain() {
+      return { ...gainStub };
+    }
+    createMediaStreamDestination() {
+      return { ...destStub };
+    }
+    close() {
+      return Promise.resolve();
+    }
   };
   globalThis.webkitAudioContext = globalThis.AudioContext;
 
   // HTMLMediaElement.setSinkId stub
-  HTMLMediaElement.prototype.setSinkId = function () { return Promise.resolve(); };
+  HTMLMediaElement.prototype.setSinkId = function () {
+    return Promise.resolve();
+  };
 
   // localStorage stub
   const store = {};
   Object.defineProperty(globalThis, 'localStorage', {
     value: {
       getItem: (k) => store[k] ?? null,
-      setItem: (k, v) => { store[k] = String(v); },
-      removeItem: (k) => { delete store[k]; },
+      setItem: (k, v) => {
+        store[k] = String(v);
+      },
+      removeItem: (k) => {
+        delete store[k];
+      },
     },
     configurable: true,
   });
@@ -151,7 +192,9 @@ function loadApp() {
   // Use `with(window)` is not available in strict mode, so instead we
   // execute the code as a script via the Function constructor which
   // inherits the jsdom global scope.
-  const script = new Function(code + `
+  const script = new Function(
+    code +
+      `
     return {
       state, render, toggleCamera, toggleMute, createRoom,
       leaveSession, showToast, dismissToast, formatTime, handleJoin,
@@ -159,7 +202,8 @@ function loadApp() {
       getLocalMedia, stopLocalMedia, cleanupTestMedia, createTestStream,
       enumerateAudioOutputDevices,
     };
-  `);
+  `,
+  );
   return script();
 }
 

@@ -9,11 +9,11 @@ const POLL_INTERVAL_MS = 2000;
 const HYSTERESIS_COUNT = 3;
 
 const TIERS = [
-  { label: 'HD',     minKbps: 2500, width: 1280, height: 720, fps: 30 },
-  { label: 'SD',     minKbps: 1000, width: 640,  height: 480, fps: 30 },
-  { label: 'SD Low', minKbps: 500,  width: 640,  height: 480, fps: 15 },
-  { label: 'Low',    minKbps: 200,  width: 320,  height: 240, fps: 15 },
-  { label: 'Min',    minKbps: 0,    width: 320,  height: 240, fps: 10 },
+  { label: 'HD', minKbps: 2500, width: 1280, height: 720, fps: 30 },
+  { label: 'SD', minKbps: 1000, width: 640, height: 480, fps: 30 },
+  { label: 'SD Low', minKbps: 500, width: 640, height: 480, fps: 15 },
+  { label: 'Low', minKbps: 200, width: 320, height: 240, fps: 15 },
+  { label: 'Min', minKbps: 0, width: 320, height: 240, fps: 10 },
 ];
 
 export class QualityController {
@@ -50,6 +50,7 @@ export class QualityController {
     this._prevTimestamp = null;
   }
 
+  // eslint-disable-next-line sonarjs/cognitive-complexity -- grandfathered at 23; the stats poller branches per metric — split when next touched
   async _poll() {
     if (!this._pc) return;
 
@@ -66,9 +67,10 @@ export class QualityController {
 
     stats.forEach((report) => {
       if (report.type === 'candidate-pair' && report.nominated) {
-        rttMs = report.currentRoundTripTime != null
-          ? Math.round(report.currentRoundTripTime * 1000)
-          : null;
+        rttMs =
+          report.currentRoundTripTime != null
+            ? Math.round(report.currentRoundTripTime * 1000)
+            : null;
       }
       if (report.type === 'outbound-rtp' && report.kind === 'video') {
         outboundVideo = report;
@@ -139,10 +141,12 @@ export class QualityController {
   _applyConstraints() {
     const track = this._localStream?.getVideoTracks()[0];
     if (!track) return;
-    track.applyConstraints({
-      width: { ideal: this._currentTier.width },
-      height: { ideal: this._currentTier.height },
-      frameRate: { ideal: this._currentTier.fps },
-    }).catch(() => {});
+    track
+      .applyConstraints({
+        width: { ideal: this._currentTier.width },
+        height: { ideal: this._currentTier.height },
+        frameRate: { ideal: this._currentTier.fps },
+      })
+      .catch(() => {});
   }
 }

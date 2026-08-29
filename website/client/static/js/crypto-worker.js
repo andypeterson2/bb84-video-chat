@@ -34,11 +34,7 @@ async function encryptFrame(frame, controller) {
 
   const t0 = performance.now();
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    currentKey,
-    frame.data,
-  );
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, currentKey, frame.data);
 
   const result = new Uint8Array(2 + 12 + ciphertext.byteLength);
   result[0] = currentKeyIndex & 0xff;
@@ -75,11 +71,7 @@ async function decryptFrame(frame, controller) {
   const ciphertext = view.slice(14);
 
   try {
-    const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv },
-      currentKey,
-      ciphertext,
-    );
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, currentKey, ciphertext);
     frame.data = plaintext;
 
     const latencyUs = (performance.now() - t0) * 1000;
@@ -116,8 +108,6 @@ if (typeof self.RTCTransformEvent !== 'undefined' || typeof self.onrtctransform 
         }
       },
     });
-    event.transformer.readable
-      .pipeThrough(transform)
-      .pipeTo(event.transformer.writable);
+    event.transformer.readable.pipeThrough(transform).pipeTo(event.transformer.writable);
   });
 }

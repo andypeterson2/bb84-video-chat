@@ -40,7 +40,10 @@ _STREAMING = [
     {"protocol": "socket.io", "event": "room-created", "description": "Room-creation result."},
     {"protocol": "socket.io", "event": "room-joined", "description": "Room-join result (both peers)."},
     {"protocol": "socket.io", "event": "peer-disconnected", "description": "Peer left/disconnected notification."},
-    {"protocol": "webrtc", "description": "Encrypted media + BB84/QKD run peer-to-peer in the browser; not brokered by this server."},
+    {
+        "protocol": "webrtc",
+        "description": "Encrypted media + BB84/QKD run peer-to-peer in the browser; not brokered by this server.",
+    },
 ]
 
 

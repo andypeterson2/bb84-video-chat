@@ -4,10 +4,24 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "eslint . && prettier --check 'website/client/static/**/*.js' 'tests/js/**/*.js' vitest.config.js",
+    "format": "prettier --write 'website/client/static/**/*.js' 'tests/js/**/*.js' vitest.config.js"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "globals": "^16.5.0",
     "jsdom": "^26.1.0",
+    "prettier": "^3.9.6",
     "vitest": "^3.1.1"
+  },
+  "prettier": {
+    "semi": true,
+    "singleQuote": true,
+    "tabWidth": 2,
+    "trailingComma": "all",
+    "printWidth": 100
   }
 }

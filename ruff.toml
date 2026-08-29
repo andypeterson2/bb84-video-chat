@@ -48,15 +48,6 @@ ignore = [
     "SIM105",  # contextlib.suppress suggestion
     "UP036",   # version block outdated
 ]
-# Middleware is legacy code being replaced by signaling/ — relax strict rules
-"middleware/**" = [
-    "E402", "PLC0415", "PLR0915", "PLR2004", "C901",
-    "SLF001", "BLE001", "N806", "S310", "TRY",
-    "EM102", "FBT",
-]
-"server/rest_api.py" = ["E402", "PLC0415"]  # sys.path before imports
-"server/main.py" = ["E402"]
-"server/admin_routes.py" = ["E402"]
 "tests/conftest.py" = ["E402"]
 "signaling/main.py" = ["E402"]      # sys.path before imports
 

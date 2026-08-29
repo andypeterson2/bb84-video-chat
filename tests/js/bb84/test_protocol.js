@@ -31,10 +31,7 @@ describe('BB84Protocol', () => {
       targetKeyLength: 128,
     });
 
-    const [aliceResult, bobResult] = await Promise.all([
-      alice.runAsAlice(),
-      bob.runAsBob(),
-    ]);
+    const [aliceResult, bobResult] = await Promise.all([alice.runAsAlice(), bob.runAsBob()]);
 
     expect(aliceResult.key).not.toBeNull();
     expect(bobResult.key).not.toBeNull();
@@ -62,10 +59,7 @@ describe('BB84Protocol', () => {
         targetKeyLength: 128,
       });
 
-      const [aliceResult] = await Promise.all([
-        alice.runAsAlice(),
-        bob.runAsBob(),
-      ]);
+      const [aliceResult] = await Promise.all([alice.runAsAlice(), bob.runAsBob()]);
 
       const efficiency = aliceResult.metrics.siftedBits / aliceResult.metrics.rawBits;
       results.push(efficiency);
@@ -151,10 +145,7 @@ describe('BB84Protocol', () => {
       targetKeyLength: 128,
     });
 
-    const [aliceResult, bobResult] = await Promise.all([
-      alice.runAsAlice(),
-      bob.runAsBob(),
-    ]);
+    const [aliceResult, bobResult] = await Promise.all([alice.runAsAlice(), bob.runAsBob()]);
 
     // At least one side should reject (return null key)
     const rejected = aliceResult.key === null || bobResult.key === null;
