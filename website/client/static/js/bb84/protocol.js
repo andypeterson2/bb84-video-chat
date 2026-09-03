@@ -19,6 +19,24 @@ export class BB84Protocol {
     this._numRawBits = options.numRawBits ?? 4096;
     this._qberThreshold = options.qberThreshold ?? 0.11;
     this._targetKeyLength = options.targetKeyLength ?? 128;
+    // Optional live-progress hook: called with { step, ...detail } as each phase
+    // of the round completes, so a UI can animate the pipeline. Off by default.
+    this._onPhase = typeof options.onPhase === 'function' ? options.onPhase : null;
+    // Optional per-step pause. A full round is sub-second, so on-camera the
+    // phases would flash by; a small delay makes them followable. Tests leave
+    // this at 0, so they stay fast and deterministic.
+    this._stepDelayMs = options.stepDelayMs ?? 0;
+  }
+
+  /** Emit a pipeline phase to the optional progress hook. @private */
+  _phase(step, detail = {}) {
+    if (this._onPhase) this._onPhase({ step, ...detail });
+  }
+
+  /** Pause between phases when a step delay is configured (live UI only). @private */
+  _pace() {
+    if (!this._stepDelayMs) return Promise.resolve();
+    return new Promise((resolve) => setTimeout(resolve, this._stepDelayMs));
   }
 
   /**
@@ -40,15 +58,26 @@ export class BB84Protocol {
     }));
 
     await this._qc.sendQubits(qubits);
+    this._phase('transmit', { sent: this._numRawBits });
+    await this._pace();
 
-    // Step 2: Basis reconciliation — receive Bob's bases, send Alice's bases
-    const bobBases = await this._cc.receive();
+    // Step 2: Basis reconciliation — receive Bob's bases and detection events,
+    // send Alice's bases
+    const bobAnnouncement = await this._cc.receive();
+    const bobBases = bobAnnouncement.bases;
+
     await this._cc.send(aliceBases);
 
-    // Sift
-    const siftedAlice = this._sift(aliceBases, bobBases, aliceBits);
+    // Sift: keep only slots where Bob registered a photon AND the bases agree.
+    // The detection filter is load-bearing — an undetected slot still carries a
+    // basis and a placeholder bit, so sifting on bases alone mixes ~50%-wrong
+    // coin flips into the key. Over a lossy channel that reads as a ~50% QBER
+    // and aborts every single round.
+    const siftedAlice = this._sift(aliceBases, bobBases, aliceBits, bobAnnouncement.detected);
     metrics.siftedBits = siftedAlice.length;
     metrics.siftingEfficiency = siftedAlice.length / this._numRawBits;
+    this._phase('sift', { sifted: siftedAlice.length, raw: this._numRawBits });
+    await this._pace();
 
     // Step 3: QBER estimation — exchange subset
     const sampleSize = Math.min(Math.floor(siftedAlice.length / 4), 256);
@@ -65,9 +94,11 @@ export class BB84Protocol {
     const qber = this._estimateQber(
       sampleIndices.map((i) => siftedAlice[i]),
       bobSample.values,
-      sampleSize
+      sampleSize,
     );
     metrics.qber = qber;
+    this._phase('qber', { qber, sample: sampleSize });
+    await this._pace();
 
     // Remove sample bits from key material
     const sampleSet = new Set(sampleIndices);
@@ -75,6 +106,7 @@ export class BB84Protocol {
 
     if (qber > this._qberThreshold) {
       metrics.isSecure = false;
+      this._phase('abort', { qber });
       await this._cc.send({ type: 'abort', reason: 'qber-exceeded' });
       metrics.roundDurationMs = Date.now() - startTime;
       return { key: null, qber, metrics };
@@ -85,6 +117,8 @@ export class BB84Protocol {
     // Step 4: Error correction (simplified binary cascade)
     // Exchange parities for error correction
     const correctedAlice = await this._errorCorrectAlice(keyBitsAlice);
+    this._phase('correct', { bits: correctedAlice.length });
+    await this._pace();
 
     // Step 5: Privacy amplification
     // Generate a random Toeplitz seed and share it
@@ -95,6 +129,7 @@ export class BB84Protocol {
     metrics.keyLength = this._targetKeyLength;
     metrics.isSecure = true;
     metrics.roundDurationMs = Date.now() - startTime;
+    this._phase('amplify', { keyLength: this._targetKeyLength });
 
     return {
       key: this._bitsToBytes(finalBits),
@@ -116,6 +151,9 @@ export class BB84Protocol {
     metrics.rawBits = this._numRawBits;
 
     const received = await this._qc.receiveQubits();
+    // Which pulses actually produced a detection event. Channels that model no
+    // loss (the ideal channel) omit the flag entirely — every slot counts.
+    const bobDetected = received.map((q) => q.detected !== false);
     // Measure: if bases match, bit is correct; otherwise random
     const bobBits = received.map((q, i) => {
       if (bobBases[i] === q.basis) {
@@ -123,15 +161,19 @@ export class BB84Protocol {
       }
       return Math.random() < 0.5 ? 0 : 1;
     });
+    this._phase('transmit', { sent: this._numRawBits });
+    await this._pace();
 
-    // Step 2: Send Bob's bases, receive Alice's
-    await this._cc.send(bobBases);
+    // Step 2: Announce Bob's bases and detection events, receive Alice's bases
+    await this._cc.send({ bases: bobBases, detected: bobDetected });
     const aliceBases = await this._cc.receive();
 
-    // Sift
-    const siftedBob = this._sift(aliceBases, bobBases, bobBits);
+    // Sift — same positions Alice keeps (see runAsAlice)
+    const siftedBob = this._sift(aliceBases, bobBases, bobBits, bobDetected);
     metrics.siftedBits = siftedBob.length;
     metrics.siftingEfficiency = siftedBob.length / this._numRawBits;
+    this._phase('sift', { sifted: siftedBob.length, raw: this._numRawBits });
+    await this._pace();
 
     // Step 3: QBER estimation
     const aliceSample = await this._cc.receive();
@@ -146,6 +188,8 @@ export class BB84Protocol {
 
     const qber = this._estimateQber(aliceSample.values, bobSampleValues, sampleSize);
     metrics.qber = qber;
+    this._phase('qber', { qber, sample: sampleSize });
+    await this._pace();
 
     // Remove sample bits
     const sampleSet = new Set(sampleIndices);
@@ -154,12 +198,15 @@ export class BB84Protocol {
     const decision = await this._cc.receive();
     if (decision.type === 'abort') {
       metrics.isSecure = false;
+      this._phase('abort', { qber });
       metrics.roundDurationMs = Date.now() - startTime;
       return { key: null, qber, metrics };
     }
 
     // Step 4: Error correction
     const correctedBob = await this._errorCorrectBob(keyBitsBob);
+    this._phase('correct', { bits: correctedBob.length });
+    await this._pace();
 
     // Step 5: Privacy amplification
     const toeplitzMsg = await this._cc.receive();
@@ -167,6 +214,7 @@ export class BB84Protocol {
     metrics.keyLength = this._targetKeyLength;
     metrics.isSecure = true;
     metrics.roundDurationMs = Date.now() - startTime;
+    this._phase('amplify', { keyLength: this._targetKeyLength });
 
     return {
       key: this._bitsToBytes(finalBits),
@@ -182,9 +230,12 @@ export class BB84Protocol {
    * @param {Array<number>} bits - the bits to filter (either Alice's or Bob's)
    * @returns {Array<number>}
    */
-  _sift(aliceBases, bobBases, bits) {
+  _sift(aliceBases, bobBases, bits, detected = null) {
     const result = [];
     for (let i = 0; i < aliceBases.length; i++) {
+      // A pulse Bob never registered carries no shared information. Keeping it
+      // would inject a coin-flip into both key strings — see runAsAlice.
+      if (detected && !detected[i]) continue;
       if (aliceBases[i] === bobBases[i]) {
         result.push(bits[i]);
       }
