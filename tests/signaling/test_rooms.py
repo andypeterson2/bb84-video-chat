@@ -1,5 +1,7 @@
 """Unit tests for signaling.rooms — room management logic."""
 
+import re
+
 import pytest
 
 from signaling.rooms import Room, RoomManager
@@ -50,9 +52,9 @@ class TestRoomManager:
         mgr.register_peer("sid1")
         room = mgr.create_room("sid1")
         assert room is not None
-        assert len(room.room_id) == 5
-        assert room.room_id.isdigit()
-        assert 10000 <= int(room.room_id) <= 99999
+        # Capability token: ~128 bits of URL-safe entropy, not a guessable code.
+        assert len(room.room_id) >= 20
+        assert re.fullmatch(r"[A-Za-z0-9_-]+", room.room_id)
         assert room.peers == ["sid1"]
         assert mgr.room_count == 1
         assert mgr.get_peer("sid1").room_id == room.room_id

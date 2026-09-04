@@ -14,6 +14,7 @@ Non-responsibilities:
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import re
@@ -25,6 +26,7 @@ from flask_cors import CORS
 
 from signaling.errors import register_error_handlers
 from signaling.rooms import RoomManager
+from signaling.throttle import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -51,19 +53,32 @@ def _version() -> str:
     """Service version (overridable via QVC_VERSION at deploy time)."""
     return os.environ.get("QVC_VERSION", "0.1.0")
 
-# CORS: accept any localhost origin + production domain
+# CORS: any localhost port + the production domain. The localhost entry is a
+# FULLY ANCHORED regex on purpose — flask-cors matches regex entries with
+# re.match (start-anchored only), so the old wildcard "http://localhost:*"
+# also admitted origins like http://localhostevil.com.
 _CORS_RAW = os.environ.get(
     "QVC_CORS_ORIGINS",
-    "http://localhost:*,https://localhost:*,https://andypeterson.dev",
+    r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$,https://andypeterson.dev",
 )
 _CORS_LIST = [o.strip() for o in _CORS_RAW.split(",")]
-_LOCALHOST_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$")
-_EXTRA_ORIGINS = {o for o in _CORS_LIST if not o.endswith(":*")}
+# Entries starting with '^' are regexes (flask-cors treats them the same way);
+# everything else is matched exactly.
+_CORS_REGEXES = [re.compile(o) for o in _CORS_LIST if o.startswith("^")]
+_EXTRA_ORIGINS = {o for o in _CORS_LIST if not o.startswith("^")}
 
 
 def _check_origin(origin: str) -> bool:
-    """Check if an origin is allowed (any localhost port + explicit origins)."""
-    return _LOCALHOST_RE.match(origin) is not None or origin in _EXTRA_ORIGINS
+    """Origin check for Socket.IO (which needs a callable, not patterns)."""
+    return origin in _EXTRA_ORIGINS or any(rx.match(origin) for rx in _CORS_REGEXES)
+
+
+def _client_ip(environ: dict) -> str:
+    """Best-effort client IP for rate limiting (first XFF hop behind a proxy)."""
+    forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return environ.get("REMOTE_ADDR", "unknown")
 
 
 def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, PLR0915
@@ -89,7 +104,29 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
 
     rooms = RoomManager()
 
+    # Per-IP token bucket covering connect/create/join — the abuse surface.
+    # SDP/ICE relay is not throttled: it is only reachable once paired.
+    limiter = RateLimiter(
+        rate=int(os.environ.get("QVC_RATE_LIMIT", "30")),
+        per=float(os.environ.get("QVC_RATE_WINDOW", "60")),
+    )
+    sid_ips: dict[str, str] = {}
+
     # ── REST endpoints ──────────────────────────────────────────────
+
+    # Admin surface is fail-closed: without QVC_ADMIN_SECRET in the environment
+    # it does not exist (404, indistinguishable from no such route), and with it
+    # every /admin request must present the secret in X-Admin-Secret.
+    admin_secret = os.environ.get("QVC_ADMIN_SECRET", "")
+
+    @flask_app.before_request
+    def _admin_guard():
+        if not flask_req.path.startswith("/admin"):
+            return None
+        supplied = flask_req.headers.get("X-Admin-Secret", "")
+        if not admin_secret or not hmac.compare_digest(supplied, admin_secret):
+            return jsonify({"error": "not found"}), 404
+        return None
 
     @flask_app.route("/admin/status")
     def admin_status():
@@ -104,7 +141,11 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     @flask_app.route("/admin/events")
     def admin_events():
         """Return recent events for the dashboard."""
-        limit = int(flask_req.args.get("limit", 20))
+        try:
+            limit = int(flask_req.args.get("limit", "20"))
+        except ValueError:
+            return jsonify({"error": "limit must be an integer"}), 400
+        limit = max(1, min(limit, 100))
         return jsonify({"events": rooms.get_events(limit)})
 
     @flask_app.route("/admin/rooms")
@@ -156,16 +197,23 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     # ── Socket.IO events ────────────────────────────────────────────
 
     @sio.event
-    def connect(sid, _environ):
-        """Handle new peer connection."""
+    def connect(sid, environ):
+        """Handle new peer connection (rejected outright when over the rate cap)."""
+        ip = _client_ip(environ)
+        if not limiter.allow(ip):
+            logger.warning("Connection rate limit exceeded")
+            return False
+        sid_ips[sid] = ip
         rooms.register_peer(sid)
         rooms.log_event("peer_connected", sid=sid)
         logger.info("Peer connected: %s (total: %d)", sid, rooms.peer_count)
         sio.emit("welcome", {"sid": sid}, room=sid)
+        return True
 
     @sio.event
     def disconnect(sid):
         """Handle peer disconnection — notify room partner."""
+        sid_ips.pop(sid, None)
         room = rooms.get_peer_room(sid)
         other_sid = room.other_peer(sid) if room else None
         room_id = rooms.unregister_peer(sid)
@@ -177,6 +225,9 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     @sio.event
     def create_room(sid):
         """Create a new room. Emitter becomes the first peer."""
+        if not limiter.allow(sid_ips.get(sid, "unknown")):
+            sio.emit("error", {"message": "Rate limit exceeded — slow down"}, room=sid)
+            return
         room = rooms.create_room(sid)
         if room is None:
             sio.emit("error", {"message": "Cannot create room"}, room=sid)
@@ -187,11 +238,15 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
 
     @sio.event
     def join_room(sid, data):
-        """Join an existing room by room_id."""
+        """Join an existing room by its capability token."""
+        if not limiter.allow(sid_ips.get(sid, "unknown")):
+            sio.emit("error", {"message": "Rate limit exceeded — slow down"}, room=sid)
+            return
         room_id = data.get("room_id", "") if isinstance(data, dict) else str(data)
         room = rooms.join_room(sid, room_id)
         if room is None:
-            sio.emit("error", {"message": f"Cannot join room {room_id}"}, room=sid)
+            # Deliberately does not echo the attempted token back.
+            sio.emit("error", {"message": "Cannot join room"}, room=sid)
             return
         other_sid = room.other_peer(sid)
         rooms.log_event("peer_joined", sid=sid, room_id=room_id)

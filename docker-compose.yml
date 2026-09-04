@@ -10,7 +10,8 @@ services:
       QVC_SERVER_REST_PORT: "${QVC_SERVER_PORT}"
       QVC_HOST: "0.0.0.0"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${QVC_SERVER_PORT}/admin/status"]
+      # /health is unauthenticated; /admin/* is behind QVC_ADMIN_SECRET (404 without it).
+      test: ["CMD", "curl", "-f", "http://localhost:${QVC_SERVER_PORT}/health"]
       interval: 10s
       timeout: 5s
       retries: 5
