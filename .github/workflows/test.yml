@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main, refactor]
+  # No base filter: stacked security/feature PRs (base = another branch) must
+  # gate the same way as PRs into main.
   pull_request:
-    branches: [main]
 
 env:
   QVC_DEVELOPMENT: 'true'
