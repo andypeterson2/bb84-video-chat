@@ -12,7 +12,7 @@ import { BB84Orchestrator } from '../../../website/client/static/js/bb84/orchest
 import { WebRTCManager } from '../../../website/client/static/js/webrtc.js';
 
 /** Every method the orchestrator is allowed to call on its WebRTCManager. */
-const USED_METHODS = ['sendData', 'setEncryptionKey'];
+const USED_METHODS = ['sendData', 'setEncryptionKey', 'getDtlsFingerprints'];
 
 /**
  * Two orchestrators wired to each other, each behind a fake WebRTCManager that

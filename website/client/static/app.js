@@ -29,6 +29,7 @@ const state = {
   // never assumed from the UI's own bookkeeping.
   cipherState: 'establishing',
   joinLink: '',
+  sas: null, // {digits, emoji[]} — frozen after the first authenticated round
   eavesdropper: false,
   pipeline: [], // live BB84 step progress for the current round (see freshPipeline)
   errorMessage: '',
@@ -140,9 +141,20 @@ function connectToSignaling(url) {
         // The DataChannel carries BB84's quantum + classical messages. The room
         // creator runs the protocol as Alice; the joiner runs as Bob whenever
         // the creator announces a round (it never self-starts, so an injected
-        // round-start can't wedge it into a phantom round).
-        bb84.init(state.isInitiator);
-        if (state.isInitiator) bb84.runRound(true);
+        // round-start can't wedge it into a phantom round). The room's
+        // capability token doubles as the channel-authentication secret.
+        bb84
+          .init({ roomToken: state.roomId, isInitiator: state.isInitiator })
+          .then(() => {
+            if (state.isInitiator) bb84.runRound(true);
+          })
+          .catch(() => {
+            // Auth bootstrap failed (fingerprints/HKDF): no round may run.
+            // Loud red state, never a silent fall-through to "establishing".
+            state.cipherState = 'compromised';
+            showToast('Secure-channel setup failed — no key will be established.');
+            render();
+          });
       });
       webrtcManager.on('data-channel-message', (d) => bb84.handleMessage(d));
       webrtcManager.on('peer-disconnected', () => {
@@ -215,16 +227,24 @@ function handleBB84State(s) {
     state.qberHistory.push(s.qber);
     state.keyBudget = (s.metrics && s.metrics.keyLength) || 0;
     state.keyIndex = s.keyIndex;
+    if (s.sas) state.sas = s.sas;
     state.pipeline.forEach((st) => {
       if (st.status !== 'failed') st.status = 'done';
     });
   } else if (s.phase === 'failed') {
-    if (typeof s.qber === 'number') {
-      state.qber = s.qber;
-      state.qberHistory.push(s.qber);
+    if (s.reason === 'auth-failure') {
+      // MAC or fingerprint verification failed: tampering, not noise. Latched
+      // by the orchestrator (no retries); show it loudly.
+      state.cipherState = 'auth-failed';
+      showToast('Channel authentication FAILED — possible man-in-the-middle. Leave the call.');
+    } else {
+      if (typeof s.qber === 'number') {
+        state.qber = s.qber;
+        state.qberHistory.push(s.qber);
+      }
+      setStep('qber', 'failed');
+      showToast('QBER above the 11% threshold — key rejected, re-keying.');
     }
-    setStep('qber', 'failed');
-    showToast('QBER above the 11% threshold — key rejected, re-keying.');
   } else if (s.phase === 'error') {
     showToast('Key exchange error — retrying.');
   } else if (s.phase === 'exhausted') {
@@ -462,6 +482,12 @@ function handleJoinRoom(e) {
   });
 }
 
+/** The user compared the SAS on camera and it differs — treat as MITM. */
+function handleSasMismatch() {
+  showToast('SAS mismatch reported — tearing down the call. Do not trust this channel.');
+  handleLeave();
+}
+
 function copyJoinLink() {
   if (!state.joinLink) return;
   navigator.clipboard
@@ -483,6 +509,7 @@ function resetSession() {
   state.keyIndex = null;
   state.cipherState = 'establishing';
   state.joinLink = '';
+  state.sas = null;
   state.eavesdropper = false;
   state.pipeline = [];
   stopTimer();
@@ -546,6 +573,7 @@ function cipherPill() {
     unencrypted: { mod: 'unencrypted', label: 'NOT ENCRYPTED — media blocked' },
     compromised: { mod: 'unencrypted', label: 'RE-KEY FAILED — channel suspect' },
     unsupported: { mod: 'unencrypted', label: 'ENCRYPTION UNSUPPORTED (browser)' },
+    'auth-failed': { mod: 'unencrypted', label: 'AUTHENTICATION FAILED' },
   };
   const v = views[state.cipherState] || views.establishing;
   return `<span class="cipher-pill cipher-pill--${v.mod}">${v.label}</span>`;
@@ -617,6 +645,16 @@ function render() {
           <video id="local-video" class="pip-video" autoplay muted playsinline></video>
         </div>
         <div class="call-info"><span>Room <strong id="room-ref"></strong></span>${cipherPill()}<span id="timer">${fmtTime(state.elapsed)}</span></div>
+        ${
+          state.sas
+            ? `<div class="sas">
+          <span class="sas-emoji">${state.sas.emoji.join(' ')}</span>
+          <strong class="sas-digits" id="sas-digits"></strong>
+          <span class="sas-hint">Compare with your partner on camera — same emoji, same digits.</span>
+          <button class="sas-mismatch" onclick="handleSasMismatch()">Doesn't match</button>
+        </div>`
+            : ''
+        }
         <div id="quantum-panel" class="quantum-panel">
           ${
             state.bb84Active
@@ -657,6 +695,8 @@ function render() {
       <div id="toast" class="toast"></div>`;
     const roomRef = document.getElementById('room-ref');
     if (roomRef) roomRef.textContent = state.roomId ? `${state.roomId.slice(0, 4)}\u2026` : '';
+    const sasDigits = document.getElementById('sas-digits');
+    if (sasDigits && state.sas) sasDigits.textContent = state.sas.digits;
     if (localStream) {
       const v = document.getElementById('local-video');
       if (v) {
@@ -683,3 +723,4 @@ window.toggleCamera = toggleCamera;
 window.toggleMute = toggleMute;
 window.toggleEavesdropper = toggleEavesdropper;
 window.copyJoinLink = copyJoinLink;
+window.handleSasMismatch = handleSasMismatch;

@@ -10,6 +10,7 @@ import {
   BobQuantumChannel,
   DataChannelClassicalChannel,
 } from './datachannel-adapter.js';
+import { AuthenticatedClassicalChannel, ChannelAuth } from './channel-auth.js';
 
 const MAX_CONSECUTIVE_FAILURES = 3;
 const RETRY_DELAY_MS = 5000;
@@ -70,6 +71,11 @@ export class BB84Orchestrator {
     this._deadlineTimer = null;
     this._isInitiator = false;
     this._pendingRoundStart = false;
+    this._auth = null;
+    this._authChannel = null;
+    this._authFailed = false;
+    this._fpPromise = null;
+    this._fps = null;
   }
 
   /**
@@ -95,20 +101,70 @@ export class BB84Orchestrator {
   }
 
   /**
-   * Initialize the multiplexer. Call once on data-channel-open.
+   * Initialize the multiplexer and (when a room token is given) the channel
+   * authentication layer. Call once on data-channel-open.
    *
-   * @param {boolean} [isInitiator] - whether this side initiates rounds (the
-   *   room creator, Alice). The initiator announces rounds and ignores
-   *   incoming round-starts; the joiner only ever runs rounds the initiator
-   *   announced.
+   * Without a token the classical channel runs UNAUTHENTICATED — that mode
+   * exists for tests and local harnesses only; the app always passes the
+   * room's capability token.
+   *
+   * @param {object} [options]
+   * @param {string} [options.roomToken] - join-link capability token
+   * @param {boolean} [options.isInitiator] - this side's role (the initiator
+   *   announces rounds and ignores incoming round-starts; the joiner only
+   *   runs rounds the initiator announced)
    */
-  init(isInitiator = false) {
+  async init({ roomToken, isInitiator } = {}) {
     if (this._mux) this._mux.close();
     this._roundInProgress = false;
     this._pendingRoundStart = false;
     this._isInitiator = !!isInitiator;
     this._mux = new DataChannelMux((data) => this._webrtc.sendData(data));
+    if (roomToken) {
+      this._auth = await ChannelAuth.create(roomToken, isInitiator ? 'initiator' : 'joiner');
+      // One channel for the lifetime of the call: sequence numbers and the
+      // SAS transcript continue across rounds.
+      this._authChannel = new AuthenticatedClassicalChannel(
+        new DataChannelClassicalChannel(this._mux),
+        this._auth,
+      );
+    }
     this._listenForRoundStarts();
+  }
+
+  /**
+   * Exchange and cross-check DTLS fingerprints over the authenticated channel
+   * (once per call, before the first round). Each side MACs its view; the
+   * peer's view must be the mirror image of ours or someone is in the middle.
+   * @private
+   */
+  async _ensureFingerprints() {
+    if (!this._auth) return;
+    if (!this._fpPromise) {
+      this._fpPromise = (async () => {
+        const fps = this._webrtc.getDtlsFingerprints();
+        await this._authChannel.send({ type: 'fp', local: fps.local, remote: fps.remote });
+        const peer = await this._receiveFp();
+        if (!fps.local || !fps.remote || peer.local !== fps.remote || peer.remote !== fps.local) {
+          const err = new Error('DTLS fingerprint mismatch — possible man-in-the-middle');
+          err.name = 'ChannelAuthError';
+          throw err;
+        }
+        this._fps = fps;
+      })();
+    }
+    await this._fpPromise;
+  }
+
+  /** @private */
+  async _receiveFp() {
+    const peer = await this._authChannel.receive();
+    if (!peer || peer.type !== 'fp') {
+      const err = new Error('expected fingerprint exchange message');
+      err.name = 'ChannelAuthError';
+      throw err;
+    }
+    return peer;
   }
 
   /**
@@ -159,7 +215,7 @@ export class BB84Orchestrator {
    * @param {boolean} isAlice - true if this peer is the initiator (Alice)
    */
   async runRound(isAlice) {
-    if (this._roundInProgress || !this._mux) return;
+    if (this._roundInProgress || !this._mux || this._authFailed) return;
     this._roundInProgress = true;
     if (isAlice) {
       this._isInitiator = true;
@@ -177,7 +233,8 @@ export class BB84Orchestrator {
     }, roundDeadlineMs());
 
     try {
-      const cc = new DataChannelClassicalChannel(this._mux, signal);
+      await this._ensureFingerprints();
+      const cc = this._authChannel ?? new DataChannelClassicalChannel(this._mux, signal);
       const qc = isAlice
         ? new AliceQuantumChannel(
             this._mux,
@@ -200,11 +257,18 @@ export class BB84Orchestrator {
         // WebRTCManager's key-handoff API is setEncryptionKey(rawKey, keyIndex) —
         // it posts the key to the Insertable Streams crypto worker.
         this._webrtc.setEncryptionKey(result.key, this._keyIndex);
+        let sas = null;
+        if (this._auth && this._fps) {
+          const fpInitiator = this._auth.role === 'initiator' ? this._fps.local : this._fps.remote;
+          const fpJoiner = this._auth.role === 'initiator' ? this._fps.remote : this._fps.local;
+          sas = await this._auth.sas(fpInitiator, fpJoiner);
+        }
         this._onStateChange({
           phase: 'complete',
           qber: result.qber,
           keyIndex: this._keyIndex,
           metrics: result.metrics,
+          sas,
         });
         this._keyIndex++;
         this._consecutiveFailures = 0;
@@ -218,9 +282,16 @@ export class BB84Orchestrator {
         this._scheduleRetry(isAlice);
       }
     } catch (err) {
-      this._consecutiveFailures++;
-      this._onStateChange({ phase: 'error', error: err });
-      this._scheduleRetry(isAlice);
+      if (err && err.name === 'ChannelAuthError') {
+        // A failed MAC or fingerprint mismatch does not go away on retry —
+        // someone is tampering with the channel. Latch and stop.
+        this._authFailed = true;
+        this._onStateChange({ phase: 'failed', reason: 'auth-failure', error: err });
+      } else {
+        this._consecutiveFailures++;
+        this._onStateChange({ phase: 'error', error: err });
+        this._scheduleRetry(isAlice);
+      }
     } finally {
       clearTimeout(this._deadlineTimer);
       this._roundAbort = null;
