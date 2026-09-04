@@ -198,3 +198,23 @@ describe('BB84Orchestrator live pipeline', () => {
     }
   });
 });
+
+// Alice-initiated re-keys (budget-low, eavesdropper toggle) announce the round
+// over the control channel so Bob's side actually runs — without it, Alice's
+// qubits sat unread in Bob's queue and the round deadlocked.
+describe('BB84Orchestrator round-start announcements', () => {
+  test("alice alone starting a round also runs bob's side to completion", async () => {
+    const p = pair();
+    try {
+      await p.round(); // initial round, as data-channel-open would
+      await p.alice.runRound(true); // re-key initiated by alice ONLY
+      await vi.waitFor(() => {
+        expect(p.states.bob.filter((s) => s.phase === 'complete')).toHaveLength(2);
+      });
+      expect(p.installed.alice.map((k) => k.keyIndex)).toEqual([0, 1]);
+      expect(p.installed.bob.map((k) => k.keyIndex)).toEqual([0, 1]);
+    } finally {
+      p.destroy();
+    }
+  });
+});

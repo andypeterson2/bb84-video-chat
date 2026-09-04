@@ -84,6 +84,27 @@ export class BB84Orchestrator {
    */
   init() {
     this._mux = new DataChannelMux((data) => this._webrtc.sendData(data));
+    this._listenForRoundStarts();
+  }
+
+  /**
+   * Follow the peer's round-start announcements.
+   *
+   * Only Alice initiates rounds (re-keying on budget-low, or immediately on
+   * the eavesdropper toggle), and Bob's side has to actually run the protocol
+   * for the round to progress — without this listener an Alice-initiated
+   * re-key deadlocked, with her qubits sitting unread in Bob's queue.
+   * @private
+   */
+  async _listenForRoundStarts() {
+    const mux = this._mux;
+    while (this._mux === mux) {
+      const msg = await mux.receive('control');
+      if (msg && msg.type === 'round-start' && !this._roundInProgress) {
+        // The announcing peer runs as Alice; this side joins as Bob.
+        this.runRound(false);
+      }
+    }
   }
 
   /**
@@ -101,6 +122,7 @@ export class BB84Orchestrator {
   async runRound(isAlice) {
     if (this._roundInProgress || !this._mux) return;
     this._roundInProgress = true;
+    if (isAlice) this._mux.send('control', { type: 'round-start' });
     this._onStateChange({ phase: 'running' });
 
     try {
@@ -149,14 +171,20 @@ export class BB84Orchestrator {
     }
   }
 
-  /** Cancel any pending retry. */
+  /** Cancel any pending retry and stop the control listener. */
   destroy() {
     clearTimeout(this._retryTimer);
+    this._mux = null;
   }
 
   /** @private */
   _scheduleRetry(isAlice) {
-    if (this._consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) return;
+    if (this._consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      // No more retries — the UI must show this loudly (permanent red pill),
+      // not leave a stale "encrypting" state on screen.
+      this._onStateChange({ phase: 'exhausted', failures: this._consecutiveFailures });
+      return;
+    }
     clearTimeout(this._retryTimer);
     this._retryTimer = setTimeout(() => this.runRound(isAlice), RETRY_DELAY_MS);
   }
