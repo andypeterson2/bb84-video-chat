@@ -234,44 +234,9 @@ export class BB84Orchestrator {
 
     try {
       await this._ensureFingerprints();
-      const cc = this._authChannel ?? new DataChannelClassicalChannel(this._mux, signal);
-      const qc = isAlice
-        ? new AliceQuantumChannel(
-            this._mux,
-            {
-              ...CHANNEL_OPTIONS,
-              eavesdropperEnabled: this._eavesdropper,
-            },
-            signal,
-          )
-        : new BobQuantumChannel(this._mux, signal);
-
-      const protocol = new BB84Protocol(qc, cc, {
-        ...PROTOCOL_OPTIONS,
-        stepDelayMs: this._stepDelayMs,
-        onPhase: (p) => this._onStateChange({ phase: 'progress', ...p }),
-      });
-      const result = isAlice ? await protocol.runAsAlice() : await protocol.runAsBob();
-
+      const result = await this._runProtocol(isAlice, signal);
       if (result.key) {
-        // WebRTCManager's key-handoff API is setEncryptionKey(rawKey, keyIndex) —
-        // it posts the key to the Insertable Streams crypto worker.
-        this._webrtc.setEncryptionKey(result.key, this._keyIndex);
-        let sas = null;
-        if (this._auth && this._fps) {
-          const fpInitiator = this._auth.role === 'initiator' ? this._fps.local : this._fps.remote;
-          const fpJoiner = this._auth.role === 'initiator' ? this._fps.remote : this._fps.local;
-          sas = await this._auth.sas(fpInitiator, fpJoiner);
-        }
-        this._onStateChange({
-          phase: 'complete',
-          qber: result.qber,
-          keyIndex: this._keyIndex,
-          metrics: result.metrics,
-          sas,
-        });
-        this._keyIndex++;
-        this._consecutiveFailures = 0;
+        await this._completeRound(result);
       } else {
         this._consecutiveFailures++;
         this._onStateChange({
@@ -282,16 +247,7 @@ export class BB84Orchestrator {
         this._scheduleRetry(isAlice);
       }
     } catch (err) {
-      if (err && err.name === 'ChannelAuthError') {
-        // A failed MAC or fingerprint mismatch does not go away on retry —
-        // someone is tampering with the channel. Latch and stop.
-        this._authFailed = true;
-        this._onStateChange({ phase: 'failed', reason: 'auth-failure', error: err });
-      } else {
-        this._consecutiveFailures++;
-        this._onStateChange({ phase: 'error', error: err });
-        this._scheduleRetry(isAlice);
-      }
+      this._handleRoundError(err, isAlice);
     } finally {
       clearTimeout(this._deadlineTimer);
       this._roundAbort = null;
@@ -301,6 +257,63 @@ export class BB84Orchestrator {
         if (!this._isInitiator) this.runRound(false);
       }
     }
+  }
+
+  /** Build the channels and run one protocol round under the deadline signal. @private */
+  async _runProtocol(isAlice, signal) {
+    const cc = this._authChannel ?? new DataChannelClassicalChannel(this._mux, signal);
+    const qc = isAlice
+      ? new AliceQuantumChannel(
+          this._mux,
+          {
+            ...CHANNEL_OPTIONS,
+            eavesdropperEnabled: this._eavesdropper,
+          },
+          signal,
+        )
+      : new BobQuantumChannel(this._mux, signal);
+    const protocol = new BB84Protocol(qc, cc, {
+      ...PROTOCOL_OPTIONS,
+      stepDelayMs: this._stepDelayMs,
+      onPhase: (p) => this._onStateChange({ phase: 'progress', ...p }),
+    });
+    return isAlice ? protocol.runAsAlice() : protocol.runAsBob();
+  }
+
+  /** Install the derived key and report completion (with the SAS when authed). @private */
+  async _completeRound(result) {
+    // WebRTCManager's key-handoff API is setEncryptionKey(rawKey, keyIndex) —
+    // it posts the key to the Insertable Streams crypto worker.
+    this._webrtc.setEncryptionKey(result.key, this._keyIndex);
+    let sas = null;
+    if (this._auth && this._fps) {
+      const fpInitiator = this._auth.role === 'initiator' ? this._fps.local : this._fps.remote;
+      const fpJoiner = this._auth.role === 'initiator' ? this._fps.remote : this._fps.local;
+      sas = await this._auth.sas(fpInitiator, fpJoiner);
+    }
+    this._onStateChange({
+      phase: 'complete',
+      qber: result.qber,
+      keyIndex: this._keyIndex,
+      metrics: result.metrics,
+      sas,
+    });
+    this._keyIndex++;
+    this._consecutiveFailures = 0;
+  }
+
+  /** Route a thrown round error: auth failures latch, everything else retries. @private */
+  _handleRoundError(err, isAlice) {
+    if (err && err.name === 'ChannelAuthError') {
+      // A failed MAC or fingerprint mismatch does not go away on retry —
+      // someone is tampering with the channel. Latch and stop.
+      this._authFailed = true;
+      this._onStateChange({ phase: 'failed', reason: 'auth-failure', error: err });
+      return;
+    }
+    this._consecutiveFailures++;
+    this._onStateChange({ phase: 'error', error: err });
+    this._scheduleRetry(isAlice);
   }
 
   /**
