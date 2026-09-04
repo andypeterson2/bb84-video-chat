@@ -12,6 +12,9 @@
 
 import { BB84Metrics } from './metrics.js';
 
+/** Error-correction block size — one parity bit is disclosed per block. */
+const PARITY_BLOCK_SIZE = 8;
+
 export class BB84Protocol {
   constructor(quantumChannel, classicalChannel, options = {}) {
     this._qc = quantumChannel;
@@ -109,7 +112,22 @@ export class BB84Protocol {
       this._phase('abort', { qber });
       await this._cc.send({ type: 'abort', reason: 'qber-exceeded' });
       metrics.roundDurationMs = Date.now() - startTime;
-      return { key: null, qber, metrics };
+      return { key: null, qber, metrics, abortReason: 'qber-exceeded' };
+    }
+
+    // Honest key budget: error correction discloses one parity bit per block
+    // on the public channel, and leftover hashing can only distill what Eve
+    // does not know — at most (n − leaked) bits. AES-GCM needs exactly
+    // targetKeyLength bits, so a short budget aborts the round (a shorter key
+    // is not an option) rather than pretending the leak away.
+    const leakedBits = Math.ceil(keyBitsAlice.length / PARITY_BLOCK_SIZE);
+    metrics.leakedBits = leakedBits;
+    if (keyBitsAlice.length - leakedBits < this._targetKeyLength) {
+      metrics.isSecure = false;
+      this._phase('abort', { qber, reason: 'key-budget' });
+      await this._cc.send({ type: 'abort', reason: 'key-budget' });
+      metrics.roundDurationMs = Date.now() - startTime;
+      return { key: null, qber, metrics, abortReason: 'key-budget' };
     }
 
     await this._cc.send({ type: 'continue' });
@@ -121,11 +139,14 @@ export class BB84Protocol {
     await this._pace();
 
     // Step 5: Privacy amplification
-    // Generate a random Toeplitz seed and share it
+    // Generate a random Toeplitz seed and share it. The seed is public (Eve
+    // may see it); the security of leftover hashing comes from it being
+    // chosen fresh and uniformly per round, which is why it must come from a
+    // crypto-grade RNG.
     const toeplitzSeed = this._randomBits(correctedAlice.length + this._targetKeyLength - 1);
     await this._cc.send({ type: 'toeplitz-seed', seed: toeplitzSeed });
 
-    const finalBits = this._privacyAmplify(correctedAlice, this._targetKeyLength);
+    const finalBits = this._privacyAmplify(correctedAlice, this._targetKeyLength, toeplitzSeed);
     metrics.keyLength = this._targetKeyLength;
     metrics.isSecure = true;
     metrics.roundDurationMs = Date.now() - startTime;
@@ -159,6 +180,8 @@ export class BB84Protocol {
       if (bobBases[i] === q.basis) {
         return q.bit;
       }
+      // Wrong-basis measurement: simulated quantum randomness (physics, not a
+      // secret) — plain Math.random is deliberate here.
       return Math.random() < 0.5 ? 0 : 1;
     });
     this._phase('transmit', { sent: this._numRawBits });
@@ -195,12 +218,16 @@ export class BB84Protocol {
     const sampleSet = new Set(sampleIndices);
     const keyBitsBob = siftedBob.filter((_, i) => !sampleSet.has(i));
 
+    // Mirror Alice's key-budget accounting (same n on both sides by
+    // construction, so the numbers agree without negotiation).
+    metrics.leakedBits = Math.ceil(keyBitsBob.length / PARITY_BLOCK_SIZE);
+
     const decision = await this._cc.receive();
     if (decision.type === 'abort') {
       metrics.isSecure = false;
-      this._phase('abort', { qber });
+      this._phase('abort', { qber, reason: decision.reason });
       metrics.roundDurationMs = Date.now() - startTime;
-      return { key: null, qber, metrics };
+      return { key: null, qber, metrics, abortReason: decision.reason ?? 'qber-exceeded' };
     }
 
     // Step 4: Error correction
@@ -208,9 +235,22 @@ export class BB84Protocol {
     this._phase('correct', { bits: correctedBob.length });
     await this._pace();
 
-    // Step 5: Privacy amplification
+    // Step 5: Privacy amplification — hash with the SAME Toeplitz matrix
+    // Alice used, reconstructed from her transmitted seed. Anything else and
+    // the two 128-bit keys are unrelated bit strings.
     const toeplitzMsg = await this._cc.receive();
-    const finalBits = this._privacyAmplify(correctedBob, this._targetKeyLength);
+    const expectedSeedLength = correctedBob.length + this._targetKeyLength - 1;
+    if (
+      toeplitzMsg?.type !== 'toeplitz-seed' ||
+      !Array.isArray(toeplitzMsg.seed) ||
+      toeplitzMsg.seed.length !== expectedSeedLength
+    ) {
+      metrics.isSecure = false;
+      this._phase('abort', { qber, reason: 'bad-seed' });
+      metrics.roundDurationMs = Date.now() - startTime;
+      return { key: null, qber, metrics, abortReason: 'bad-seed' };
+    }
+    const finalBits = this._privacyAmplify(correctedBob, this._targetKeyLength, toeplitzMsg.seed);
     metrics.keyLength = this._targetKeyLength;
     metrics.isSecure = true;
     metrics.roundDurationMs = Date.now() - startTime;
@@ -265,15 +305,15 @@ export class BB84Protocol {
    * Exchanges block parities with Bob to correct errors.
    */
   async _errorCorrectAlice(bits) {
-    const blockSize = 8;
+    const blockSize = PARITY_BLOCK_SIZE;
     const parities = [];
     for (let i = 0; i < bits.length; i += blockSize) {
       const block = bits.slice(i, i + blockSize);
       parities.push(block.reduce((a, b) => a ^ b, 0));
     }
     await this._cc.send({ type: 'parities', parities });
-    // Receive corrected block info
-    const correction = await this._cc.receive();
+    // Consume Bob's correction-done — positional queue sync only.
+    await this._cc.receive();
     // Alice keeps her bits (she is the reference)
     return [...bits];
   }
@@ -283,7 +323,7 @@ export class BB84Protocol {
    * Receives parities from Alice, flips bits in mismatched blocks.
    */
   async _errorCorrectBob(bits) {
-    const blockSize = 8;
+    const blockSize = PARITY_BLOCK_SIZE;
     const aliceParityMsg = await this._cc.receive();
     const aliceParities = aliceParityMsg.parities;
 
@@ -304,33 +344,52 @@ export class BB84Protocol {
   }
 
   /**
-   * Privacy amplification using Toeplitz hashing.
-   * @param {Array<number>} bits - input bit array
-   * @param {number} targetLength - desired output length in bits
-   * @returns {Array<number>} - compressed bit array
+   * Privacy amplification: multiply the corrected key by a random Toeplitz
+   * matrix over GF(2) (the leftover-hash construction).
+   *
+   * The m×n matrix is defined by the shared seed s of length n + m − 1 via
+   * T[i][j] = s[i − j + (n − 1)] — constant along every diagonal, so one seed
+   * fixes the whole matrix and both sides reconstruct it identically. Seed
+   * values are used mod 2 (& 1), so a malformed-but-right-length seed still
+   * yields a well-defined (if useless) matrix rather than NaN bits.
+   *
+   * @param {Array<number>} bits - corrected key bits (length n)
+   * @param {number} targetLength - output length m in bits
+   * @param {Array<number>} seed - shared Toeplitz seed, length n + m − 1
+   * @returns {Array<number>} - the m hashed bits
    */
-  _privacyAmplify(bits, targetLength) {
-    // Toeplitz matrix multiplication: output[i] = XOR of bits[j] where toeplitz[i][j] = 1
-    // We use a deterministic seed based on the bits themselves for the Toeplitz matrix
-    const result = [];
+  _privacyAmplify(bits, targetLength, seed) {
     const n = bits.length;
+    const expected = n + targetLength - 1;
+    if (!Array.isArray(seed) || seed.length !== expected) {
+      throw new Error(
+        `privacy amplification needs a ${expected}-bit Toeplitz seed, got ${
+          Array.isArray(seed) ? seed.length : typeof seed
+        }`,
+      );
+    }
+    const result = new Array(targetLength);
     for (let i = 0; i < targetLength; i++) {
       let val = 0;
       for (let j = 0; j < n; j++) {
-        // Use a simple hash-like selection: include bit j if hash(i,j) is odd
-        const h = ((i + 1) * 2654435761 + (j + 1) * 2246822519) >>> 0;
-        if (h & 1) {
-          val ^= bits[j];
-        }
+        if (bits[j]) val ^= seed[i - j + n - 1] & 1;
       }
-      result.push(val);
+      result[i] = val;
     }
     return result;
   }
 
-  /** @private */
+  /**
+   * Crypto-grade random bits. Feeds Alice's raw key bits, both sides' basis
+   * choices, and the Toeplitz seed — everything whose predictability would
+   * hand Eve the key. (The channel models' Math.random stays: it simulates
+   * physics — photon loss, wrong-basis measurement outcomes — not secrets.)
+   * @private
+   */
   _randomBits(n) {
-    return Array.from({ length: n }, () => (Math.random() < 0.5 ? 1 : 0));
+    const bytes = new Uint8Array(n);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b & 1);
   }
 
   /** @private */

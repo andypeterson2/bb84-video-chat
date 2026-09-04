@@ -17,7 +17,7 @@ Browser A ◄══ WebRTC (P2P encrypted media) ══► Browser B
 - **WebRTC**: peer-to-peer video/audio via `RTCPeerConnection`
 - **Insertable Streams**: AES-128-GCM frame encryption in a Web Worker (`RTCRtpScriptTransform`)
 - **DataChannel**: BB84 key exchange messages flow peer-to-peer
-- **BB84 Protocol** (JavaScript): sifting, QBER estimation, Cascade error correction, Toeplitz privacy amplification
+- **BB84 Protocol** (JavaScript): sifting, QBER estimation, block-parity error correction (simplified; full Cascade is future work), seeded Toeplitz privacy amplification
 
 ## Quick Start
 
@@ -30,7 +30,6 @@ Browser A ◄══ WebRTC (P2P encrypted media) ══► Browser B
 ### Run the signaling server
 
 ```bash
-cd packages/qvc
 pip install flask flask-cors python-socketio eventlet
 python signaling/main.py
 ```
@@ -64,12 +63,9 @@ This is a research demonstration, not a production QKD system.
 
 - **Signaling server**: room creation, SDP/ICE relay, connection lifecycle management
 - **WebRTC video**: peer-to-peer video and audio between browsers
-- **BB84 key exchange**: full protocol over DataChannel — basis sifting, QBER estimation, Cascade error correction, Toeplitz privacy amplification. Produces matching symmetric keys on both peers.
+- **BB84 key exchange**: full protocol over DataChannel — basis sifting, QBER estimation, block-parity error correction, and privacy amplification by a per-round seeded Toeplitz hash (leftover hashing): Alice draws the seed from the crypto RNG, transmits it, and both sides distill the same 128-bit key with the same matrix. Parity bits disclosed during error correction are subtracted from the key budget; a round that cannot cover the 128-bit target aborts rather than shrinking the key.
 - **Eavesdropper detection**: intercept-resend attacks raise QBER above the 11% threshold, triggering automatic key rejection and re-exchange
-
-### In Progress
-
-- **Connecting BB84 keys to video encryption**: the AES-128-GCM Insertable Streams encryption pipeline exists (Web Worker, `RTCRtpScriptTransform`, frame encrypt/decrypt), but `state.encryptionEnabled` is never set to `true` after key exchange completes. The BB84-derived keys are not yet wired into the frame encryption path.
+- **BB84 keys drive the frame encryption**: on round completion the derived key is posted to the crypto worker (`setEncryptionKey` → `set-key`), and the AES-128-GCM Insertable Streams transforms (installed on every sender/receiver at connection setup) switch from passthrough to encrypt/decrypt. Requires `RTCRtpScriptTransform` support in the browser.
 
 ### Simulated
 
@@ -80,22 +76,20 @@ This is a research demonstration, not a production QKD system.
 ### Python (signaling server)
 
 ```bash
-cd packages/qvc
 pip install pytest
 python -m pytest tests/signaling/ -v
 ```
 
-41 tests: room management unit tests + signaling flow integration tests (including connection loss and clean teardown scenarios).
+51 tests: room management unit tests + signaling flow integration tests (including connection loss and clean teardown scenarios). Run from the repo root (`pytest.ini` lives there).
 
 ### JavaScript (crypto, BB84, metrics)
 
 ```bash
-cd packages/qvc
 npm install
-NODE_OPTIONS="--experimental-vm-modules" npx jest tests/js/ --verbose
+npm test
 ```
 
-37 tests: AES-GCM frame crypto, BB84 protocol over ideal/simulated channels, metrics collector, signaling client.
+94 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, and key-budget aborts), metrics collector, signaling client, and app DOM.
 
 ## Project Structure
 
@@ -124,6 +118,6 @@ website/client/
 shared/              # Legacy shared code (BB84 reference, encryption)
 tests/
   signaling/         # Python signaling tests
-  js/                # JavaScript tests (jest)
+  js/                # JavaScript tests (vitest)
     bb84/            # BB84 protocol + simulation tests
 ```

@@ -10,5 +10,7 @@ export class BB84Metrics {
     this.roundDurationMs = 0;
     this.siftingEfficiency = 0;
     this.isSecure = false;
+    /** Parity bits disclosed during error correction (subtracted from the key budget). */
+    this.leakedBits = 0;
   }
 }

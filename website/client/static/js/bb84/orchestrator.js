@@ -136,7 +136,7 @@ export class BB84Orchestrator {
         this._onStateChange({
           phase: 'failed',
           qber: result.qber,
-          reason: 'qber-exceeded',
+          reason: result.abortReason ?? 'qber-exceeded',
         });
         this._scheduleRetry(isAlice);
       }
