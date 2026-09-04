@@ -1,3 +1,6 @@
 pytest
 pytest-mock
 pytest-cov
+# Compatible-release pin: the enforced rule set shifts with ruff minors, so
+# CI must not float across them.
+ruff~=0.15.16

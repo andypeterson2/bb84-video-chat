@@ -23,10 +23,14 @@ jobs:
           python-version: '3.11'
 
       - name: Install linting tools
-        run: pip install ruff
+        # The pin lives in requirements-dev.txt — the enforced rule set must
+        # not float with ruff releases.
+        run: pip install "ruff~=0.15.16"
 
       - name: Run ruff check
-        run: ruff check signaling/ tests/signaling/
+        # Whole repo — the old signaling/-scoped invocation silently skipped
+        # tests/conftest.py and tests/__init__.py.
+        run: ruff check .
 
   python-tests:
     name: Python Tests
@@ -67,6 +71,9 @@ jobs:
 
       - name: Install JS dependencies
         run: npm install
+
+      - name: Lint the client + tests
+        run: npm run lint
 
       - name: Run JS tests
         run: npx vitest run

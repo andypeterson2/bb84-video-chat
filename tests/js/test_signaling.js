@@ -123,7 +123,9 @@ describe('SignalingClient', () => {
   });
 
   test('offer/answer/ice-candidate relay events fire callbacks', () => {
-    const offers = [], answers = [], ice = [];
+    const offers = [],
+      answers = [],
+      ice = [];
     client.on('offer', (d) => offers.push(d));
     client.on('answer', (d) => answers.push(d));
     client.on('ice-candidate', (d) => ice.push(d));

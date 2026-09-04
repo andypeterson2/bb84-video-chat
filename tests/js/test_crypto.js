@@ -5,7 +5,12 @@
  * Runs in Node environment (not jsdom) to avoid ArrayBuffer realm issues.
  */
 import { webcrypto } from 'node:crypto';
-import { importKey, encryptFrame, decryptFrame, parseKeyIndex } from '../../website/client/static/js/crypto.js';
+import {
+  importKey,
+  encryptFrame,
+  decryptFrame,
+  parseKeyIndex,
+} from '../../website/client/static/js/crypto.js';
 
 describe('Frame Crypto', () => {
   let key;
@@ -47,8 +52,7 @@ describe('Frame Crypto', () => {
     const wrongRawKey = new Uint8Array(16).fill(0xff);
     const wrongKey = await importKey(wrongRawKey, webcrypto.subtle);
 
-    await expect(decryptFrame(encrypted, wrongKey, webcrypto.subtle))
-      .rejects.toThrow();
+    await expect(decryptFrame(encrypted, wrongKey, webcrypto.subtle)).rejects.toThrow();
   });
 
   test('tampered ciphertext fails decryption', async () => {
@@ -58,8 +62,7 @@ describe('Frame Crypto', () => {
     const tampered = new Uint8Array(encrypted);
     tampered[20] ^= 0x01;
 
-    await expect(decryptFrame(tampered.buffer, key, webcrypto.subtle))
-      .rejects.toThrow();
+    await expect(decryptFrame(tampered.buffer, key, webcrypto.subtle)).rejects.toThrow();
   });
 
   test('large frame round-trip (simulating video frame)', async () => {
