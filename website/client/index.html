@@ -9,7 +9,10 @@
   </head>
   <body>
     <div id="app" class="main-screen"></div>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <!-- Vendored socket.io-client 4.7.5 (was a CDN tag — a third party in the
+         E2E-crypto page's script chain). Provenance: cdn.socket.io + jsDelivr,
+         both matching sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO -->
+    <script src="static/vendor/socket.io-4.7.5.min.js"></script>
     <script src="static/app.js"></script>
   </body>
 </html>

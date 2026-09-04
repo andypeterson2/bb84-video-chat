@@ -139,6 +139,15 @@ export class WebRTCManager {
     });
 
     this._socket.on('offer', async (data) => {
+      // Renegotiation guard: an offer arriving mid-call would silently rebuild
+      // the peer connection with a fresh, KEYLESS crypto worker — a downgrade
+      // that used to flow plaintext while the UI still said encrypted. There
+      // is no legitimate renegotiation path in this app; ignore and surface it.
+      if (this._pc) {
+        console.warn('Ignoring unexpected mid-call SDP offer (renegotiation is not supported)');
+        this._emit('error', { message: 'unexpected renegotiation offer ignored' });
+        return;
+      }
       // Non-initiator receives offer, creates answer
       await this._createPeerConnection();
       this._addLocalTracks();
@@ -203,7 +212,22 @@ export class WebRTCManager {
 
     // Set up encryption worker if needed
     if (this._enableEncryption) {
-      this._encryptWorker = new Worker('/js/crypto-worker.js', { type: 'module' });
+      if (this._encryptWorker) this._encryptWorker.terminate();
+      // Relative to this module (static/js/), so it resolves under any deploy
+      // root — the old absolute '/js/…' 404'd on the Pages deployment, and a
+      // Worker 404 fails silently: encryption never engaged.
+      this._encryptWorker = new Worker(new URL('./crypto-worker.js', import.meta.url), {
+        type: 'module',
+      });
+      this._encryptWorker.onerror = (e) => {
+        this._emit('cipher-state', { state: 'worker-error', error: String(e.message || e) });
+      };
+      this._encryptWorker.onmessage = (event) => {
+        const msg = event.data || {};
+        if (msg.type === 'cipher-state') this._emit('cipher-state', msg);
+        else if (msg.type === 'decrypt-error') this._emit('decrypt-error', msg);
+        else if (msg.type === 'metrics') this._emit('crypto-metrics', msg);
+      };
     }
   }
 

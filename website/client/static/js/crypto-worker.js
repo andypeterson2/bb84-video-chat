@@ -4,13 +4,20 @@
  * Runs in a Web Worker context. Receives RTCRtpScriptTransform events
  * and encrypts/decrypts encoded frames using AES-128-GCM.
  *
+ * FAIL-CLOSED: until a key arrives, every frame is DROPPED — never passed
+ * through in the clear. The pre-key media blackout is the honest behavior;
+ * the UI's cipher-state pill (fed by the messages below) tells the user why.
+ *
  * Communication with main thread:
- *   - { type: 'set-key', rawKey: Uint8Array, keyIndex: number }
- *   - { type: 'metrics', encryptLatencyUs: number, decryptLatencyUs: number }
+ *   - in:  { type: 'set-key', rawKey: Uint8Array, keyIndex: number }
+ *   - out: { type: 'cipher-state', state: 'keyless'|'encrypting', keyIndex? }
+ *   - out: { type: 'metrics', encryptLatencyUs / decryptLatencyUs }
+ *   - out: { type: 'decrypt-error' }
  */
 
 let currentKey = null;
 let currentKeyIndex = 0;
+let announcedKeyless = false;
 
 /**
  * Import a raw AES-128-GCM key.
@@ -21,15 +28,22 @@ async function importKey(rawKey) {
   return crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
+/** Drop a keyless frame, announcing the state once (not per frame). */
+function dropKeyless() {
+  if (!announcedKeyless) {
+    announcedKeyless = true;
+    self.postMessage({ type: 'cipher-state', state: 'keyless' });
+  }
+}
+
 /**
  * Encrypt an encoded frame.
  * Frame format: [keyIndex:2][iv:12][ciphertext+tag]
  */
 async function encryptFrame(frame, controller) {
   if (!currentKey) {
-    // Pass through unencrypted if no key is set
-    controller.enqueue(frame);
-    return;
+    dropKeyless();
+    return; // fail closed: no key, no frame
   }
 
   const t0 = performance.now();
@@ -54,16 +68,16 @@ async function encryptFrame(frame, controller) {
  */
 async function decryptFrame(frame, controller) {
   if (!currentKey) {
-    controller.enqueue(frame);
-    return;
+    dropKeyless();
+    return; // fail closed: cannot authenticate, do not render
   }
 
   const t0 = performance.now();
   const view = new Uint8Array(frame.data);
 
   if (view.length < 14) {
-    // Too small to be encrypted — pass through
-    controller.enqueue(frame);
+    // Too small to carry [keyIndex:2][iv:12] — not one of our frames. Drop it;
+    // passing it through would render unauthenticated data.
     return;
   }
 
@@ -91,6 +105,8 @@ self.onmessage = async (event) => {
   if (type === 'set-key') {
     currentKey = await importKey(rawKey);
     currentKeyIndex = keyIndex;
+    announcedKeyless = false;
+    self.postMessage({ type: 'cipher-state', state: 'encrypting', keyIndex });
   }
 };
 

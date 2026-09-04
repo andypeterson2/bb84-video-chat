@@ -3,6 +3,7 @@
 !.git*
 !.dashboard.yaml
 !.dockerignore
+!.prettierignore
 
 __pycache__
 node_modules

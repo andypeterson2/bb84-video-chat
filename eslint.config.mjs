@@ -22,7 +22,7 @@ const sharedRules = {
 };
 
 export default [
-  { ignores: ['node_modules/**'] },
+  { ignores: ['node_modules/**', 'website/client/static/vendor/**'] },
   {
     // The ES-module client libs (BB84 protocol stack, crypto, signaling, …).
     files: ['website/client/static/js/**/*.js'],
