@@ -340,6 +340,34 @@ describe('Orchestrator auth integration', () => {
     }
   });
 
+  test('a latched joiner recovers on the next announced good round', async () => {
+    const p = await authPair();
+    try {
+      p.alice.setEavesdropper(true);
+      p.alice.runRound(true);
+      // Eve drives every round past the QBER threshold; both sides latch.
+      await vi.waitFor(
+        () => {
+          expect(has(p.states.alice, (s) => s.phase === 'exhausted')).toBe(true);
+          expect(has(p.states.bob, (s) => s.phase === 'exhausted')).toBe(true);
+        },
+        { timeout: 5000 },
+      );
+      expect(p.installed.bob).toHaveLength(0);
+
+      // The toggle clears the INITIATOR's latch and re-keys; the joiner never
+      // self-starts, so its latch must not refuse the announced recovery round.
+      p.alice.setEavesdropper(false);
+      await p.round();
+      expect(completes(p.states.bob).length).toBeGreaterThanOrEqual(1);
+      expect(Array.from(p.installed.alice.at(-1).key)).toEqual(
+        Array.from(p.installed.bob.at(-1).key),
+      );
+    } finally {
+      p.destroy();
+    }
+  });
+
   test('destroy → init gives call #2 a fresh fingerprint exchange and a working round', async () => {
     const p = await authPair();
     try {

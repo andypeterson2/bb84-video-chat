@@ -236,7 +236,12 @@ export class BB84Orchestrator {
    * @param {boolean} isAlice - true if this peer is the initiator (Alice)
    */
   async runRound(isAlice) {
-    if (this._roundInProgress || !this._mux || this._exhausted) return;
+    if (this._roundInProgress || !this._mux) return;
+    // The latch stops the INITIATOR from starting rounds; the joiner keeps
+    // following announcements — its latch is a display state, and the next
+    // announced round that succeeds (e.g. the eavesdropper toggled off on
+    // the other side) is exactly how a latched joiner recovers.
+    if (isAlice && this._exhausted) return;
     this._roundInProgress = true;
     if (isAlice) {
       this._isInitiator = true;

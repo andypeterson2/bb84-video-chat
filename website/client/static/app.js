@@ -62,6 +62,7 @@ let socket = null;
 let webrtcManager = null;
 let metricsCollector = null;
 let localStream = null;
+let remoteStream = null;
 let bb84 = null;
 
 /* ── Icons ──────────────────────────────────────────────────────── */
@@ -401,6 +402,11 @@ function showLocalVideo(s) {
   }
 }
 function showRemoteVideo(s) {
+  // Keep the stream in module state: render() rebuilds the in-call DOM with
+  // innerHTML, so the <video> this attaches to is replaced on every state
+  // change — without the re-attachment in render(), the remote video went
+  // black on the first re-render after the stream arrived.
+  remoteStream = s;
   const v = document.getElementById('remote-video');
   if (v) {
     v.srcObject = s;
@@ -408,6 +414,7 @@ function showRemoteVideo(s) {
   }
 }
 function clearRemoteVideo() {
+  remoteStream = null;
   const v = document.getElementById('remote-video');
   if (v) v.srcObject = null;
 }
@@ -702,6 +709,13 @@ function render() {
     if (roomRef) roomRef.textContent = state.roomId ? `${state.roomId.slice(0, 4)}\u2026` : '';
     const sasDigits = document.getElementById('sas-digits');
     if (sasDigits && state.sas) sasDigits.textContent = state.sas.digits;
+    if (remoteStream) {
+      const rv = document.getElementById('remote-video');
+      if (rv) {
+        rv.srcObject = remoteStream;
+        rv.play().catch(() => {});
+      }
+    }
     if (localStream) {
       const v = document.getElementById('local-video');
       if (v) {
