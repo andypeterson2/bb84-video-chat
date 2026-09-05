@@ -91,7 +91,7 @@ npm install
 npm test
 ```
 
-90 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, key-budget aborts, typed-message enforcement, adversarial-peer aborts, round deadlines/teardown liveness, and stale-queue recovery), DataChannel mux hardening, the WebRTC renegotiation guard, app rendering (cipher pill states, invite flow, room-token parsing), metrics collector, and signaling client.
+112 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, key-budget aborts, typed-message enforcement, adversarial-peer aborts, round deadlines/teardown liveness, and stale-queue recovery), DataChannel mux hardening, the WebRTC renegotiation guard, app rendering (cipher pill states, SAS strip gating, invite flow, room-token parsing), channel authentication (MAC/replay/tamper aborts, the pure fingerprint-bound SAS, retry-then-latch integrity semantics, per-call lifecycle resets), metrics collector, and signaling client.
 
 ## Project Structure
 

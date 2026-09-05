@@ -10,10 +10,16 @@ import {
   BobQuantumChannel,
   DataChannelClassicalChannel,
 } from './datachannel-adapter.js';
-import { AuthenticatedClassicalChannel, ChannelAuth } from './channel-auth.js';
+import { AuthenticatedClassicalChannel, ChannelAuth, ChannelAuthError } from './channel-auth.js';
 
 const MAX_CONSECUTIVE_FAILURES = 3;
+// Overridable for tests via globalThis.QVC_RETRY_DELAY_MS (like the deadline).
 const RETRY_DELAY_MS = 5000;
+
+function retryDelayMs() {
+  const v = globalThis.QVC_RETRY_DELAY_MS;
+  return Number.isFinite(v) && v > 0 ? v : RETRY_DELAY_MS;
+}
 // A full round completes in a few seconds even on a slow link; a round still
 // unfinished after this long means the peer went silent (crash, one-sided
 // abort, dropped message). The deadline aborts every pending mux receive so
@@ -72,8 +78,7 @@ export class BB84Orchestrator {
     this._isInitiator = false;
     this._pendingRoundStart = false;
     this._auth = null;
-    this._authChannel = null;
-    this._authFailed = false;
+    this._exhausted = false;
     this._fpPromise = null;
     this._fps = null;
   }
@@ -92,6 +97,7 @@ export class BB84Orchestrator {
   setEavesdropper(enabled) {
     this._eavesdropper = !!enabled;
     this._consecutiveFailures = 0;
+    this._exhausted = false;
     clearTimeout(this._retryTimer);
   }
 
@@ -115,19 +121,24 @@ export class BB84Orchestrator {
    *   runs rounds the initiator announced)
    */
   async init({ roomToken, isInitiator } = {}) {
+    // Full lifecycle reset: every call must be exactly as protected as the
+    // first one. Leaving fingerprints, latches, or failure counters from a
+    // previous call in place made call #2 skip the fingerprint exchange
+    // entirely (stale _fpPromise) and inherit call #1's latches.
     if (this._mux) this._mux.close();
+    clearTimeout(this._retryTimer);
     this._roundInProgress = false;
     this._pendingRoundStart = false;
     this._isInitiator = !!isInitiator;
+    this._consecutiveFailures = 0;
+    this._exhausted = false;
+    this._keyIndex = 0;
+    this._fpPromise = null;
+    this._fps = null;
+    this._auth = null;
     this._mux = new DataChannelMux((data) => this._webrtc.sendData(data));
     if (roomToken) {
       this._auth = await ChannelAuth.create(roomToken, isInitiator ? 'initiator' : 'joiner');
-      // One channel for the lifetime of the call: sequence numbers and the
-      // SAS transcript continue across rounds.
-      this._authChannel = new AuthenticatedClassicalChannel(
-        new DataChannelClassicalChannel(this._mux),
-        this._auth,
-      );
     }
     this._listenForRoundStarts();
   }
@@ -138,31 +149,41 @@ export class BB84Orchestrator {
    * peer's view must be the mirror image of ours or someone is in the middle.
    * @private
    */
-  async _ensureFingerprints() {
-    if (!this._auth) return;
+  async _ensureFingerprints(signal) {
+    if (!this._auth || this._fps) return;
     if (!this._fpPromise) {
+      // One-shot channel in its own MAC domain ('fp'): a captured fingerprint
+      // envelope never verifies inside a round, and a fresh attempt after a
+      // failure restarts its sequence space on both sides.
+      const channel = new AuthenticatedClassicalChannel(
+        new DataChannelClassicalChannel(this._mux, signal),
+        this._auth,
+        'fp',
+      );
       this._fpPromise = (async () => {
         const fps = this._webrtc.getDtlsFingerprints();
-        await this._authChannel.send({ type: 'fp', local: fps.local, remote: fps.remote });
-        const peer = await this._receiveFp();
+        await channel.send({ type: 'fp', local: fps.local, remote: fps.remote });
+        const peer = await this._receiveFp(channel);
         if (!fps.local || !fps.remote || peer.local !== fps.remote || peer.remote !== fps.local) {
-          const err = new Error('DTLS fingerprint mismatch — possible man-in-the-middle');
-          err.name = 'ChannelAuthError';
-          throw err;
+          throw new ChannelAuthError('DTLS fingerprint views disagree');
         }
         this._fps = fps;
       })();
+      // The outcome is cached for the whole call, success or failure: the
+      // exchange runs at most once per init(). Re-attempting it per retry
+      // desyncs the two sides (the side that succeeded never answers again),
+      // so a failed exchange instead fails each retry round until the
+      // exhausted latch — and a new call (init) starts clean.
+      this._fpPromise.catch(() => {});
     }
     await this._fpPromise;
   }
 
   /** @private */
-  async _receiveFp() {
-    const peer = await this._authChannel.receive();
+  async _receiveFp(channel) {
+    const peer = await channel.receive();
     if (!peer || peer.type !== 'fp') {
-      const err = new Error('expected fingerprint exchange message');
-      err.name = 'ChannelAuthError';
-      throw err;
+      throw new ChannelAuthError('expected fingerprint exchange message');
     }
     return peer;
   }
@@ -215,7 +236,7 @@ export class BB84Orchestrator {
    * @param {boolean} isAlice - true if this peer is the initiator (Alice)
    */
   async runRound(isAlice) {
-    if (this._roundInProgress || !this._mux || this._authFailed) return;
+    if (this._roundInProgress || !this._mux || this._exhausted) return;
     this._roundInProgress = true;
     if (isAlice) {
       this._isInitiator = true;
@@ -233,7 +254,7 @@ export class BB84Orchestrator {
     }, roundDeadlineMs());
 
     try {
-      await this._ensureFingerprints();
+      await this._ensureFingerprints(signal);
       const result = await this._runProtocol(isAlice, signal);
       if (result.key) {
         await this._completeRound(result);
@@ -261,7 +282,11 @@ export class BB84Orchestrator {
 
   /** Build the channels and run one protocol round under the deadline signal. @private */
   async _runProtocol(isAlice, signal) {
-    const cc = this._authChannel ?? new DataChannelClassicalChannel(this._mux, signal);
+    // Fresh authenticated wrapper per round: sequence spaces restart at the
+    // round boundary, so one failed/desynced round can't wedge every later
+    // round into permanent sequence violations.
+    const raw = new DataChannelClassicalChannel(this._mux, signal);
+    const cc = this._auth ? new AuthenticatedClassicalChannel(raw, this._auth) : raw;
     const qc = isAlice
       ? new AliceQuantumChannel(
           this._mux,
@@ -302,13 +327,17 @@ export class BB84Orchestrator {
     this._consecutiveFailures = 0;
   }
 
-  /** Route a thrown round error: auth failures latch, everything else retries. @private */
+  /** Route a thrown round error: integrity failures retry then latch. @private */
   _handleRoundError(err, isAlice) {
-    if (err && err.name === 'ChannelAuthError') {
-      // A failed MAC or fingerprint mismatch does not go away on retry —
-      // someone is tampering with the channel. Latch and stop.
-      this._authFailed = true;
-      this._onStateChange({ phase: 'failed', reason: 'auth-failure', error: err });
+    if (err instanceof ChannelAuthError || (err && err.name === 'ChannelAuthError')) {
+      // A failed MAC, sequence violation, or fingerprint disagreement is
+      // EITHER tampering or an ordinary fault (a dropped message, a version
+      // skew). One instant "MITM!" alarm for a local blip destroys trust in
+      // the alarm itself — so this retries like any failed round, and only
+      // persistent failure latches via the exhausted path below.
+      this._consecutiveFailures++;
+      this._onStateChange({ phase: 'failed', reason: 'integrity', error: err });
+      this._scheduleRetry(isAlice);
       return;
     }
     this._consecutiveFailures++;
@@ -335,12 +364,20 @@ export class BB84Orchestrator {
   _scheduleRetry(isAlice) {
     if (!this._mux) return; // destroyed mid-round — nothing to retry
     if (this._consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      // No more retries — the UI must show this loudly (permanent red pill),
+      // No more retries — latch until init() (a new call) or the eavesdropper
+      // toggle clears it. The UI must show this loudly (permanent red pill),
       // not leave a stale "encrypting" state on screen.
+      this._exhausted = true;
       this._onStateChange({ phase: 'exhausted', failures: this._consecutiveFailures });
       return;
     }
+    // Only the initiator re-runs rounds; the joiner's "retry" is waiting for
+    // the initiator's next announcement. A joiner self-starting a Bob round
+    // would sit consuming the initiator's NEXT round's messages with stale
+    // sequence state — under authentication that reads as endless integrity
+    // failures and latches an honest channel.
+    if (!isAlice) return;
     clearTimeout(this._retryTimer);
-    this._retryTimer = setTimeout(() => this.runRound(isAlice), RETRY_DELAY_MS);
+    this._retryTimer = setTimeout(() => this.runRound(isAlice), retryDelayMs());
   }
 }

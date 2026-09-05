@@ -9,13 +9,17 @@
  *    channel itself was compromised — see the SAS tier below).
  *  - Direction separation: each role (initiator/joiner) signs with its own
  *    derived key, so a reflected message never verifies.
- *  - Every classical message travels as {seq, payload, tag} with a monotonic
+ *  - Every protocol message travels as {v, seq, payload, tag} with a monotonic
  *    per-direction sequence — replay, reorder, drop and injection all fail
- *    verification and abort the round as 'auth-failure'.
- *  - A short authentication string (SAS) is derived from the DTLS fingerprints
- *    and the MAC transcript of the first completed round. Two users comparing
- *    the SAS on camera authenticate the channel even if the invite link
- *    leaked: a MITM cannot make both sides' transcripts hash equal.
+ *    verification and fail the round as an integrity error. Sequence spaces
+ *    are per AuthenticatedClassicalChannel instance, and the orchestrator
+ *    creates a fresh instance per round, so a failed round never leaves the
+ *    two sides in permanently divergent sequence states.
+ *  - A short authentication string (SAS) is derived from the two DTLS
+ *    fingerprints alone — a pure function, identical on both sides by
+ *    construction. Two users comparing the SAS on camera authenticate the
+ *    media path even if the invite link leaked: a MITM terminating DTLS
+ *    presents different fingerprints and the strings visibly differ.
  *
  * Trust tiers (stated in docs/THREAT_MODEL.md): authenticated if your link
  * channel was; verified if you compared the SAS.
@@ -116,13 +120,6 @@ export class ChannelAuth {
     this._role = role;
     this._sendKey = sendKey;
     this._recvKey = recvKey;
-    // MAC tags per DIRECTION (keyed by the sender's role), each in sequence
-    // order. Kept separate because local processing order is not canonical —
-    // e.g. both sides send their fingerprint message before receiving the
-    // peer's, so interleaved orders differ. Per-direction seq order is
-    // identical on both sides by construction.
-    this._transcript = { initiator: [], joiner: [] };
-    this._frozenSas = null;
   }
 
   /** @returns {'initiator'|'joiner'} this side's role. */
@@ -156,58 +153,50 @@ export class ChannelAuth {
   }
 
   /**
-   * Append a processed message's tag to the SAS transcript (until frozen).
-   * @param {string} tag - base64 MAC tag
-   * @param {'initiator'|'joiner'} senderRole - who sent the message
-   */
-  noteTranscript(tag, senderRole) {
-    if (!this._frozenSas) this._transcript[senderRole].push(tag);
-  }
-
-  /**
-   * Derive the SAS from the DTLS fingerprints and the transcript so far, and
-   * freeze it — the string users compare should not change on every re-key.
+   * Derive the SAS from the two DTLS fingerprints. Pure: no transcript, no
+   * freezing, no per-side state — the earlier transcript-based SAS diverged
+   * between the two sides the moment their processing histories differed
+   * (a failed round, a dropped message), turning an honest channel into a
+   * permanent "MITM" reading. Fingerprints alone are already what the SAS
+   * must bind: they identify the DTLS endpoints of the media path.
    * @param {string} fpInitiator - initiator's DTLS fingerprint
    * @param {string} fpJoiner - joiner's DTLS fingerprint
    * @returns {Promise<{digits: string, emoji: string[]}>}
    */
   async sas(fpInitiator, fpJoiner) {
-    if (this._frozenSas) return this._frozenSas;
-    const material = [
-      `${CONTEXT_SALT}-sas`,
-      fpInitiator,
-      fpJoiner,
-      'initiator->',
-      ...this._transcript.initiator,
-      'joiner->',
-      ...this._transcript.joiner,
-    ].join('\n');
+    const material = [`${CONTEXT_SALT}-sas`, fpInitiator, fpJoiner].join('\n');
     const d = new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode(material)));
     const digits = String(((d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3]) >>> 0)
       .padStart(10, '0')
       .slice(-6);
     const emoji = [d[4], d[5], d[6], d[7]].map((b) => SAS_EMOJI[b % SAS_EMOJI.length]);
-    this._frozenSas = { digits, emoji };
-    return this._frozenSas;
+    return { digits, emoji };
   }
 }
 
 /**
- * Wraps a classical channel in the {seq, payload, tag} envelope.
+ * Wraps a classical channel in the {v, seq, payload, tag} envelope.
  *
  * Lives at the adapter layer so protocol.js stays protocol-only. Sequence
  * numbers are per-direction and monotonic from 0; the receive side accepts
  * exactly the next expected sequence, so replayed, reordered, or dropped
  * messages surface as a ChannelAuthError rather than being absorbed.
+ *
+ * One instance covers one MAC domain: the orchestrator builds a fresh one per
+ * round (kind 'msg') and a one-shot one for the fingerprint exchange (kind
+ * 'fp'), so sequence spaces restart at each boundary and an envelope captured
+ * in one domain never verifies in another.
  */
 export class AuthenticatedClassicalChannel {
   /**
    * @param {{send: Function, receive: Function}} inner - transport channel
    * @param {ChannelAuth} auth
+   * @param {string} [kind] - MAC domain-separation label
    */
-  constructor(inner, auth) {
+  constructor(inner, auth, kind = 'msg') {
     this._inner = inner;
     this._auth = auth;
+    this._kind = kind;
     this._sendSeq = 0;
     this._recvSeq = 0;
   }
@@ -215,8 +204,7 @@ export class AuthenticatedClassicalChannel {
   async send(data) {
     const payload = JSON.stringify(data);
     const seq = this._sendSeq++;
-    const tag = await this._auth.sign('msg', seq, payload);
-    this._auth.noteTranscript(tag, this._auth.role);
+    const tag = await this._auth.sign(this._kind, seq, payload);
     await this._inner.send({ v: 1, seq, payload, tag });
   }
 
@@ -235,10 +223,9 @@ export class AuthenticatedClassicalChannel {
     if (env.seq !== this._recvSeq) {
       throw new ChannelAuthError(`sequence violation: expected ${this._recvSeq}, got ${env.seq}`);
     }
-    const ok = await this._auth.verify('msg', env.seq, env.payload, env.tag);
+    const ok = await this._auth.verify(this._kind, env.seq, env.payload, env.tag);
     if (!ok) throw new ChannelAuthError('MAC verification failed');
     this._recvSeq++;
-    this._auth.noteTranscript(env.tag, this._auth.role === 'initiator' ? 'joiner' : 'initiator');
     try {
       return JSON.parse(env.payload);
     } catch {

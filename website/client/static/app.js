@@ -232,11 +232,12 @@ function handleBB84State(s) {
       if (st.status !== 'failed') st.status = 'done';
     });
   } else if (s.phase === 'failed') {
-    if (s.reason === 'auth-failure') {
-      // MAC or fingerprint verification failed: tampering, not noise. Latched
-      // by the orchestrator (no retries); show it loudly.
-      state.cipherState = 'auth-failed';
-      showToast('Channel authentication FAILED — possible man-in-the-middle. Leave the call.');
+    if (s.reason === 'integrity') {
+      // A MAC/sequence/fingerprint check failed. That is tampering OR an
+      // ordinary fault (dropped message, version skew) — never assert MITM
+      // as fact on one event. The orchestrator retries; persistent failure
+      // arrives below as 'exhausted' and goes red there.
+      showToast('Channel integrity check failed — tampering or a connection fault. Retrying.');
     } else {
       if (typeof s.qber === 'number') {
         state.qber = s.qber;
@@ -252,7 +253,7 @@ function handleBB84State(s) {
     // downgrades), but no fresh key is obtainable on this channel — show it
     // red and leave the decision to the user.
     state.cipherState = 'compromised';
-    showToast('Re-keying failed repeatedly — the channel may be compromised. Leave and retry.');
+    showToast('Channel integrity lost — tampering or a persistent fault. Leave and retry.');
   }
   render();
 }
@@ -562,6 +563,11 @@ function setTheme(t) {
   document.documentElement.dataset.theme = t;
 }
 
+/** Red pill states — no security promise may render beside these. */
+function pillIsRed() {
+  return ['unencrypted', 'compromised', 'unsupported'].includes(state.cipherState);
+}
+
 /** Always-visible cipher pill — worker truth, not UI assumption. */
 function cipherPill() {
   const views = {
@@ -571,9 +577,8 @@ function cipherPill() {
       label: `Encrypted · AES-GCM${state.keyIndex !== null ? ` #${state.keyIndex}` : ''}`,
     },
     unencrypted: { mod: 'unencrypted', label: 'NOT ENCRYPTED — media blocked' },
-    compromised: { mod: 'unencrypted', label: 'RE-KEY FAILED — channel suspect' },
+    compromised: { mod: 'unencrypted', label: 'CHANNEL INTEGRITY LOST' },
     unsupported: { mod: 'unencrypted', label: 'ENCRYPTION UNSUPPORTED (browser)' },
-    'auth-failed': { mod: 'unencrypted', label: 'AUTHENTICATION FAILED' },
   };
   const v = views[state.cipherState] || views.establishing;
   return `<span class="cipher-pill cipher-pill--${v.mod}">${v.label}</span>`;
@@ -646,7 +651,7 @@ function render() {
         </div>
         <div class="call-info"><span>Room <strong id="room-ref"></strong></span>${cipherPill()}<span id="timer">${fmtTime(state.elapsed)}</span></div>
         ${
-          state.sas
+          state.sas && !pillIsRed()
             ? `<div class="sas">
           <span class="sas-emoji">${state.sas.emoji.join(' ')}</span>
           <strong class="sas-digits" id="sas-digits"></strong>

@@ -2,8 +2,9 @@
  * Channel authentication — the MAC + SAS layer under the BB84 classical channel.
  *
  * Covers: cross-side MAC agreement, tamper/replay/wrong-token aborts, the full
- * protocol over authenticated channels, SAS equality, and the orchestrator's
- * latched auth-failure (no retry).
+ * protocol over authenticated channels, the pure fingerprint-bound SAS, and the
+ * orchestrator's retry-then-latch integrity semantics (a single fault costs one
+ * round; only persistent failure latches, via the exhausted path).
  */
 import { describe, test, expect } from 'vitest';
 import {
@@ -16,9 +17,27 @@ import {
   DataChannelClassicalChannel,
 } from '../../../website/client/static/js/bb84/datachannel-adapter.js';
 import { BB84Protocol } from '../../../website/client/static/js/bb84/protocol.js';
-import { BB84Orchestrator } from '../../../website/client/static/js/bb84/orchestrator.js';
+import { orchestratorPair } from './harness.js';
 
 const TOKEN = 'kRYfDKu2PNjHsguWlukncg';
+
+beforeEach(() => {
+  // Real 60s/5s waits would make the failure-path tests unrunnable.
+  globalThis.QVC_ROUND_DEADLINE_MS = 400;
+  globalThis.QVC_RETRY_DELAY_MS = 30;
+});
+
+afterEach(() => {
+  delete globalThis.QVC_ROUND_DEADLINE_MS;
+  delete globalThis.QVC_RETRY_DELAY_MS;
+});
+
+/** Authenticated orchestrator pair, initialized and ready. */
+async function authPair(options = {}) {
+  const p = orchestratorPair({ aliceToken: TOKEN, bobToken: TOKEN, ...options });
+  await p.init();
+  return p;
+}
 
 /** Two muxes wired together like an ordered, reliable DataChannel. */
 function muxPair() {
@@ -157,72 +176,34 @@ describe('BB84 over authenticated channels', () => {
     expect(sasA.emoji).toHaveLength(4);
   });
 
-  test('SAS freezes after first derivation and differs for different transcripts', async () => {
-    const authA = await ChannelAuth.create(TOKEN, 'initiator');
-    authA.noteTranscript('tag-one', 'initiator');
-    const first = await authA.sas('F1', 'F2');
-    authA.noteTranscript('tag-two', 'joiner');
-    expect(await authA.sas('F1', 'F2')).toEqual(first);
-
-    const authOther = await ChannelAuth.create(TOKEN, 'initiator');
-    authOther.noteTranscript('a-DIFFERENT-tag', 'initiator');
-    const other = await authOther.sas('F1', 'F2');
-    expect(other).not.toEqual(first);
+  test('the SAS is a pure function of the fingerprints — same everywhere, always', async () => {
+    // The earlier transcript-bound SAS diverged between two honest sides the
+    // moment their processing histories differed (a failed round, a dropped
+    // message) — an honest channel then read as a permanent MITM. Purity is
+    // the property that kills that class: role, instance, round count and
+    // history must all be irrelevant.
+    const one = await ChannelAuth.create(TOKEN, 'initiator');
+    const two = await ChannelAuth.create(TOKEN, 'joiner');
+    const first = await one.sas('F1', 'F2');
+    expect(await one.sas('F1', 'F2')).toEqual(first); // repeated calls
+    expect(await two.sas('F1', 'F2')).toEqual(first); // other role
+    expect(await (await ChannelAuth.create(TOKEN, 'initiator')).sas('F1', 'F2')).toEqual(first);
   });
 
-  test('the same tags in a different direction produce a different SAS', async () => {
-    const one = await ChannelAuth.create(TOKEN, 'initiator');
-    one.noteTranscript('tag-x', 'initiator');
-    const two = await ChannelAuth.create(TOKEN, 'initiator');
-    two.noteTranscript('tag-x', 'joiner');
-    expect(await one.sas('F1', 'F2')).not.toEqual(await two.sas('F1', 'F2'));
+  test('swapping the fingerprint order changes the SAS', async () => {
+    const auth = await ChannelAuth.create(TOKEN, 'initiator');
+    expect(await auth.sas('F1', 'F2')).not.toEqual(await auth.sas('F2', 'F1'));
+  });
+
+  test('different fingerprints change the SAS', async () => {
+    const auth = await ChannelAuth.create(TOKEN, 'initiator');
+    expect(await auth.sas('F1', 'F2')).not.toEqual(await auth.sas('F1', 'MITM'));
   });
 });
 
 describe('Orchestrator auth integration', () => {
-  /** Authenticated orchestrator pair with mirror-image DTLS fingerprints. */
-  async function authPair({ bobToken = TOKEN, tamper = null } = {}) {
-    const installed = { alice: [], bob: [] };
-    const states = { alice: [], bob: [] };
-    const peers = {};
-
-    const fps = {
-      alice: { local: 'AA:11:AA', remote: 'BB:22:BB' },
-      bob: { local: 'BB:22:BB', remote: 'AA:11:AA' },
-    };
-    const transport = (self, other) => ({
-      sendData: (data) => {
-        const wire = tamper ? tamper(self, data) : data;
-        if (wire === null) return;
-        Promise.resolve().then(() => peers[other] && peers[other].handleMessage(wire));
-      },
-      setEncryptionKey: (key, keyIndex) => installed[self].push({ key, keyIndex }),
-      getDtlsFingerprints: () => fps[self],
-    });
-
-    peers.alice = new BB84Orchestrator({
-      webrtcManager: transport('alice', 'bob'),
-      onStateChange: (s) => states.alice.push(s),
-    });
-    peers.bob = new BB84Orchestrator({
-      webrtcManager: transport('bob', 'alice'),
-      onStateChange: (s) => states.bob.push(s),
-    });
-    await peers.alice.init({ roomToken: TOKEN, isInitiator: true });
-    await peers.bob.init({ roomToken: bobToken, isInitiator: false });
-
-    return {
-      alice: peers.alice,
-      bob: peers.bob,
-      installed,
-      states,
-      round: () => Promise.all([peers.alice.runRound(true), peers.bob.runRound(false)]),
-      destroy: () => {
-        peers.alice.destroy();
-        peers.bob.destroy();
-      },
-    };
-  }
+  const has = (states, pred) => states.some(pred);
+  const completes = (states) => states.filter((s) => s.phase === 'complete');
 
   test('an authenticated round completes and reports the same SAS on both sides', async () => {
     const p = await authPair();
@@ -240,28 +221,45 @@ describe('Orchestrator auth integration', () => {
     }
   });
 
-  test('a wrong join token fails as auth-failure with no key and no retry', async () => {
+  test('a wrong join token retries, then latches via the exhausted path — no key ever', async () => {
     const p = await authPair({ bobToken: 'attacker-token' });
     try {
-      await p.round();
-      const failed = [...p.states.alice, ...p.states.bob].filter(
-        (s) => s.phase === 'failed' && s.reason === 'auth-failure',
+      p.alice.runRound(true);
+      await vi.waitFor(
+        () => {
+          expect(has(p.states.alice, (s) => s.phase === 'exhausted')).toBe(true);
+          expect(has(p.states.bob, (s) => s.phase === 'exhausted')).toBe(true);
+        },
+        { timeout: 5000 },
       );
-      expect(failed.length).toBeGreaterThan(0);
+      // Every failure was reported as an integrity fault, never a QBER story.
+      for (const side of ['alice', 'bob']) {
+        const failed = p.states[side].filter((s) => s.phase === 'failed');
+        expect(failed.length).toBeGreaterThan(0);
+        for (const f of failed) expect(['integrity', 'timeout']).toContain(f.reason);
+      }
       expect(p.installed.alice).toHaveLength(0);
       expect(p.installed.bob).toHaveLength(0);
       // Latched: another round attempt is refused outright.
+      const runsBefore = p.states.alice.filter((s) => s.phase === 'running').length;
       await p.alice.runRound(true);
-      expect(p.states.alice.filter((s) => s.phase === 'running').length).toBe(1);
+      expect(p.states.alice.filter((s) => s.phase === 'running').length).toBe(runsBefore);
     } finally {
       p.destroy();
     }
   });
 
-  test('tampering with a classical message mid-call fails as auth-failure', async () => {
+  test('one tampered round message costs one round; the retry recovers', async () => {
+    // Let the fingerprint exchange (the first two classical envelopes, one
+    // per direction) through untouched, then corrupt exactly one of alice's
+    // round messages.
+    let aliceClassicalSends = 0;
     const tamper = (self, data) => {
+      if (self !== 'alice') return data;
       const msg = JSON.parse(data);
-      if (msg.ch === 'classical' && self === 'alice') {
+      if (msg.ch !== 'classical') return data;
+      aliceClassicalSends++;
+      if (aliceClassicalSends === 2) {
         msg.payload.payload = JSON.stringify({ type: 'evil' });
         return JSON.stringify(msg);
       }
@@ -269,13 +267,121 @@ describe('Orchestrator auth integration', () => {
     };
     const p = await authPair({ tamper });
     try {
-      // Alice legitimately blocks waiting for a peer who refused her tampered
-      // message — await only Bob (the side that detects the tampering).
-      void p.alice.runRound(true);
-      await p.bob.runRound(false);
-      const failed = p.states.bob.find((s) => s.phase === 'failed' && s.reason === 'auth-failure');
-      expect(failed).toBeTruthy();
-      expect(p.installed.bob).toHaveLength(0);
+      p.alice.runRound(true);
+      await vi.waitFor(
+        () => {
+          expect(completes(p.states.alice).length).toBeGreaterThanOrEqual(1);
+          expect(completes(p.states.bob).length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 5000 },
+      );
+      // Bob saw the tampering as an integrity fault (one round), not a MITM latch.
+      expect(has(p.states.bob, (s) => s.phase === 'failed' && s.reason === 'integrity')).toBe(true);
+      expect(has(p.states.bob, (s) => s.phase === 'exhausted')).toBe(false);
+      expect(Array.from(p.installed.alice.at(-1).key)).toEqual(
+        Array.from(p.installed.bob.at(-1).key),
+      );
+      // And the SAS both sides show is identical — no post-failure divergence.
+      expect(completes(p.states.alice).at(-1).sas).toEqual(completes(p.states.bob).at(-1).sas);
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('a dropped envelope mid-round fails that round; the retry recovers', async () => {
+    let aliceClassicalSends = 0;
+    const tamper = (self, data) => {
+      if (self !== 'alice') return data;
+      const msg = JSON.parse(data);
+      if (msg.ch !== 'classical') return data;
+      aliceClassicalSends++;
+      return aliceClassicalSends === 2 ? null : data; // silently dropped
+    };
+    const p = await authPair({ tamper });
+    try {
+      p.alice.runRound(true);
+      await vi.waitFor(
+        () => {
+          expect(completes(p.states.alice).length).toBeGreaterThanOrEqual(1);
+          expect(completes(p.states.bob).length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 5000 },
+      );
+      expect(has([...p.states.alice, ...p.states.bob], (s) => s.phase === 'failed')).toBe(true);
+      expect(Array.from(p.installed.alice.at(-1).key)).toEqual(
+        Array.from(p.installed.bob.at(-1).key),
+      );
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('a plain (unauthenticated) mid-round injection costs one round, not a MITM latch', async () => {
+    // Mixed-version / injected-legacy-envelope case: bob must read it as an
+    // integrity fault and retry, never assert man-in-the-middle from one event.
+    const p = await authPair({ bobStepDelayMs: 30 });
+    try {
+      p.alice.runRound(true);
+      await vi.waitFor(() => {
+        expect(p.states.bob.some((s) => s.phase === 'running')).toBe(true);
+      });
+      p.bob.handleMessage(JSON.stringify({ ch: 'classical', payload: { type: 'abort' } }));
+      await vi.waitFor(
+        () => {
+          expect(completes(p.states.alice).length).toBeGreaterThanOrEqual(1);
+          expect(completes(p.states.bob).length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 5000 },
+      );
+      expect(has(p.states.bob, (s) => s.phase === 'failed' && s.reason === 'integrity')).toBe(true);
+      expect(has(p.states.bob, (s) => s.phase === 'exhausted')).toBe(false);
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('destroy → init gives call #2 a fresh fingerprint exchange and a working round', async () => {
+    const p = await authPair();
+    try {
+      await p.round();
+      expect(p.fpCalls).toEqual({ alice: 1, bob: 1 });
+      const firstSas = completes(p.states.alice)[0].sas;
+
+      p.destroy();
+      await p.init();
+      await p.round();
+
+      // The exchange really ran again — call #2 must not trust call #1's view.
+      expect(p.fpCalls).toEqual({ alice: 2, bob: 2 });
+      const secondSas = completes(p.states.alice).at(-1).sas;
+      expect(secondSas).toEqual(firstSas); // same fingerprints ⇒ same (pure) SAS
+      expect(p.installed.alice.at(-1).keyIndex).toBe(0); // key index reset per call
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test("call #1's exhausted latch does not leak into call #2", async () => {
+    const p = await authPair({ bobToken: 'attacker-token' });
+    try {
+      p.alice.runRound(true);
+      await vi.waitFor(
+        () => {
+          expect(has(p.states.alice, (s) => s.phase === 'exhausted')).toBe(true);
+        },
+        { timeout: 5000 },
+      );
+
+      // New call, matching tokens this time: init() must clear the latch.
+      p.destroy();
+      p.aliceToken = p.bobToken = TOKEN;
+      await p.alice.init({ roomToken: TOKEN, isInitiator: true });
+      await p.bob.init({ roomToken: TOKEN, isInitiator: false });
+      await p.round();
+      expect(completes(p.states.alice).length).toBeGreaterThanOrEqual(1);
+      expect(Array.from(p.installed.alice.at(-1).key)).toEqual(
+        Array.from(p.installed.bob.at(-1).key),
+      );
     } finally {
       p.destroy();
     }
