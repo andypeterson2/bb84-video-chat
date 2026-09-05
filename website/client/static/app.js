@@ -139,9 +139,11 @@ function connectToSignaling(url) {
         state.bb84Active = true;
         render();
         // The DataChannel carries BB84's quantum + classical messages. The room
-        // creator runs the protocol as Alice, the joiner as Bob.
-        bb84.init();
-        bb84.runRound(state.isInitiator);
+        // creator runs the protocol as Alice; the joiner runs as Bob whenever
+        // the creator announces a round (it never self-starts, so an injected
+        // round-start can't wedge it into a phantom round).
+        bb84.init(state.isInitiator);
+        if (state.isInitiator) bb84.runRound(true);
       });
       webrtcManager.on('data-channel-message', (d) => bb84.handleMessage(d));
       webrtcManager.on('peer-disconnected', () => {
@@ -267,9 +269,13 @@ function applyPipelineProgress(s) {
   activateNext(s.step);
 }
 
-/** Start another key-exchange round (also fired when the key budget runs low). */
+/**
+ * Start another key-exchange round (also fired when the key budget runs low).
+ * Only the initiator starts rounds; the joiner's orchestrator follows the
+ * initiator's round-start announcements.
+ */
 function startBB84Round() {
-  if (bb84) bb84.runRound(state.isInitiator);
+  if (bb84 && state.isInitiator) bb84.runRound(true);
 }
 
 /** Security status of the most recent round, as a `.qd-status--*` suffix. */

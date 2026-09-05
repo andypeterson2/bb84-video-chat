@@ -18,7 +18,7 @@ _MAX_ID_ATTEMPTS = 8
 _MAX_PEERS_PER_ROOM = 2
 
 
-def _redact(value: str | None) -> str | None:
+def redact(value: str | None) -> str | None:
     """Shorten an identifier for dashboards/logs.
 
     Room ids are join capabilities and sids address Socket.IO clients directly;
@@ -221,7 +221,7 @@ class RoomManager:
         """Record an event for the dashboard (identifiers stored redacted)."""
         entry: dict = {"timestamp": time.time(), "event": event}
         for key, value in kwargs.items():
-            entry[key] = _redact(value) if key in ("sid", "room_id") else value
+            entry[key] = redact(value) if key in ("sid", "room_id") else value
         self._events.append(entry)
         if len(self._events) > self._max_events:
             self._events = self._events[-self._max_events:]
@@ -240,7 +240,7 @@ class RoomManager:
         result = []
         for room_id, room in self._rooms.items():
             result.append({
-                "room": _redact(room_id),
+                "room": redact(room_id),
                 "peer_count": len(room.peers),
                 "is_full": room.is_full,
             })
@@ -253,8 +253,8 @@ class RoomManager:
             room = self._rooms.get(peer.room_id) if peer.room_id else None
             other = room.other_peer(sid) if room else None
             result.append({
-                "peer": _redact(sid),
-                "room": _redact(peer.room_id),
+                "peer": redact(sid),
+                "room": redact(peer.room_id),
                 "paired": other is not None,
             })
         return result

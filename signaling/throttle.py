@@ -11,7 +11,10 @@ from __future__ import annotations
 import threading
 import time
 
-_CLEANUP_THRESHOLD = 10_000
+# Hard ceiling on tracked buckets. A client that can vary its key (e.g. XFF
+# spoofing when a deployment mistakenly trusts it) must not grow memory without
+# bound; beyond the cap the oldest buckets are evicted outright.
+_MAX_BUCKETS = 10_000
 
 
 class RateLimiter:
@@ -23,6 +26,7 @@ class RateLimiter:
         self._per = per
         self._buckets: dict[str, tuple[float, float]] = {}  # key -> (tokens, last_ts)
         self._lock = threading.Lock()
+        self._next_sweep = time.monotonic() + per
 
     def allow(self, key: str) -> bool:
         """Consume one token for ``key``; False means the caller is throttled."""
@@ -32,8 +36,16 @@ class RateLimiter:
             tokens = min(self._rate, tokens + (now - last) * (self._rate / self._per))
             allowed = tokens >= 1.0
             self._buckets[key] = (tokens - 1.0 if allowed else tokens, now)
-            if len(self._buckets) > _CLEANUP_THRESHOLD:
-                # Drop buckets idle long enough to have fully refilled anyway.
+            if now >= self._next_sweep:
+                # Time-triggered (not size-triggered): idle buckets are dropped
+                # even when the table is small, so memory tracks live clients.
+                self._next_sweep = now + self._per
                 cutoff = now - self._per
                 self._buckets = {k: v for k, v in self._buckets.items() if v[1] >= cutoff}
+            if len(self._buckets) > _MAX_BUCKETS:
+                # Still over after sweeping: evict oldest-touched first.
+                for stale_key, _ in sorted(self._buckets.items(), key=lambda kv: kv[1][1])[
+                    : len(self._buckets) - _MAX_BUCKETS
+                ]:
+                    del self._buckets[stale_key]
             return allowed

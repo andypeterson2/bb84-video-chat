@@ -23,9 +23,10 @@ import socketio
 from flask import Flask, jsonify
 from flask import request as flask_req
 from flask_cors import CORS
+from werkzeug.exceptions import NotFound
 
-from signaling.errors import register_error_handlers
-from signaling.rooms import RoomManager
+from signaling.errors import register_error_handlers, respond_error
+from signaling.rooms import RoomManager, redact
 from signaling.throttle import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -61,11 +62,39 @@ _CORS_RAW = os.environ.get(
     "QVC_CORS_ORIGINS",
     r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$,https://andypeterson.dev",
 )
-_CORS_LIST = [o.strip() for o in _CORS_RAW.split(",")]
-# Entries starting with '^' are regexes (flask-cors treats them the same way);
-# everything else is matched exactly.
-_CORS_REGEXES = [re.compile(o) for o in _CORS_LIST if o.startswith("^")]
-_EXTRA_ORIGINS = {o for o in _CORS_LIST if not o.startswith("^")}
+# Deployments configured before the anchoring fix may still carry the legacy
+# port-wildcard form ("http://<host>:*"). Left as-is it would be matched
+# EXACTLY (never true for a real Origin header), silently locking those
+# deployments out — so translate it to the anchored any-port regex instead.
+_LEGACY_WILDCARD = re.compile(r"(https?)://([A-Za-z0-9.\-]+):\*")
+
+
+def _parse_cors(raw: str) -> tuple[list[str], list[re.Pattern], set[str]]:
+    """Split QVC_CORS_ORIGINS into (all entries, regex entries, exact entries)."""
+    entries = []
+    for item in raw.split(","):
+        entry = item.strip()
+        if not entry:
+            continue
+        legacy = _LEGACY_WILDCARD.fullmatch(entry)
+        if legacy:
+            scheme, host = legacy.groups()
+            entry = rf"^{scheme}://{re.escape(host)}(:\d+)?$"
+            logger.warning(
+                "QVC_CORS_ORIGINS entry %r uses the legacy port wildcard; "
+                "matching it as the anchored regex %r instead",
+                item.strip(),
+                entry,
+            )
+        entries.append(entry)
+    # Entries starting with '^' are regexes (flask-cors treats them the same
+    # way); everything else is matched exactly.
+    regexes = [re.compile(o) for o in entries if o.startswith("^")]
+    exact = {o for o in entries if not o.startswith("^")}
+    return entries, regexes, exact
+
+
+_CORS_LIST, _CORS_REGEXES, _EXTRA_ORIGINS = _parse_cors(_CORS_RAW)
 
 
 def _check_origin(origin: str) -> bool:
@@ -73,11 +102,29 @@ def _check_origin(origin: str) -> bool:
     return origin in _EXTRA_ORIGINS or any(rx.match(origin) for rx in _CORS_REGEXES)
 
 
+def _trusted_proxy_count() -> int:
+    """QVC_TRUSTED_PROXIES: reverse proxies in front of this server (default 0)."""
+    try:
+        return max(0, int(os.environ.get("QVC_TRUSTED_PROXIES", "0")))
+    except ValueError:
+        return 0
+
+
 def _client_ip(environ: dict) -> str:
-    """Best-effort client IP for rate limiting (first XFF hop behind a proxy)."""
-    forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Client IP for rate limiting; trusts XFF only behind trusted proxies.
+
+    X-Forwarded-For is client-controlled up to the first trusted hop: honoring
+    it unconditionally lets anyone spoof a fresh "IP" per request and sidestep
+    rate limiting entirely. With QVC_TRUSTED_PROXIES=0 (the default) the header
+    is ignored; behind N proxies, the address N hops from the right of the XFF
+    chain is the first one a proxy actually vouched for.
+    """
+    trusted = _trusted_proxy_count()
+    if trusted > 0:
+        forwarded = environ.get("HTTP_X_FORWARDED_FOR", "")
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        if len(hops) >= trusted:
+            return hops[-trusted]
     return environ.get("REMOTE_ADDR", "unknown")
 
 
@@ -125,7 +172,15 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
             return None
         supplied = flask_req.headers.get("X-Admin-Secret", "")
         if not admin_secret or not hmac.compare_digest(supplied, admin_secret):
-            return jsonify({"error": "not found"}), 404
+            if admin_secret and supplied:
+                # A wrong guess is an active probe: burn a token from the same
+                # per-IP bucket as signaling abuse, and leave a trace.
+                ip = _client_ip(flask_req.environ)
+                limiter.allow(ip)
+                logger.warning("Rejected /admin request with wrong secret from %s", ip)
+            # Shape-identical to a framework 404 so the guard does not reveal
+            # that the /admin surface exists at all.
+            return respond_error("not_found", NotFound.description, 404)
         return None
 
     @flask_app.route("/admin/status")
@@ -206,7 +261,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
         sid_ips[sid] = ip
         rooms.register_peer(sid)
         rooms.log_event("peer_connected", sid=sid)
-        logger.info("Peer connected: %s (total: %d)", sid, rooms.peer_count)
+        logger.info("Peer connected: %s (total: %d)", redact(sid), rooms.peer_count)
         sio.emit("welcome", {"sid": sid}, room=sid)
         return True
 
@@ -220,7 +275,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
         rooms.log_event("peer_disconnected", sid=sid, room_id=room_id)
         if other_sid:
             sio.emit("peer-disconnected", {"room_id": room_id}, room=other_sid)
-        logger.info("Peer disconnected: %s (total: %d)", sid, rooms.peer_count)
+        logger.info("Peer disconnected: %s (total: %d)", redact(sid), rooms.peer_count)
 
     @sio.event
     def create_room(sid):
@@ -233,7 +288,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
             sio.emit("error", {"message": "Cannot create room"}, room=sid)
             return
         rooms.log_event("room_created", sid=sid, room_id=room.room_id)
-        logger.info("Room created: %s by %s", room.room_id, sid)
+        logger.info("Room created: %s by %s", redact(room.room_id), redact(sid))
         sio.emit("room-created", {"room_id": room.room_id}, room=sid)
 
     @sio.event
@@ -250,7 +305,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
             return
         other_sid = room.other_peer(sid)
         rooms.log_event("peer_joined", sid=sid, room_id=room_id)
-        logger.info("Peer %s joined room %s", sid, room_id)
+        logger.info("Peer %s joined room %s", redact(sid), redact(room_id))
         # Notify both peers
         sio.emit("room-joined", {"room_id": room_id, "initiator": True}, room=other_sid)
         sio.emit("room-joined", {"room_id": room_id, "initiator": False}, room=sid)
@@ -264,7 +319,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
         rooms.log_event("peer_left", sid=sid, room_id=room_id)
         if room_id and other_sid:
             sio.emit("peer-disconnected", {"room_id": room_id}, room=other_sid)
-        logger.info("Peer %s left room %s", sid, room_id)
+        logger.info("Peer %s left room %s", redact(sid), redact(room_id))
 
     @sio.event
     def offer(sid, data):

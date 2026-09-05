@@ -13,6 +13,17 @@ import {
 
 const MAX_CONSECUTIVE_FAILURES = 3;
 const RETRY_DELAY_MS = 5000;
+// A full round completes in a few seconds even on a slow link; a round still
+// unfinished after this long means the peer went silent (crash, one-sided
+// abort, dropped message). The deadline aborts every pending mux receive so
+// the round fails cleanly instead of wedging the orchestrator forever.
+// Overridable for tests via globalThis.QVC_ROUND_DEADLINE_MS.
+const ROUND_DEADLINE_MS = 60_000;
+
+function roundDeadlineMs() {
+  const v = globalThis.QVC_ROUND_DEADLINE_MS;
+  return Number.isFinite(v) && v > 0 ? v : ROUND_DEADLINE_MS;
+}
 
 /**
  * Simulated-channel parameters for the live session.
@@ -55,6 +66,10 @@ export class BB84Orchestrator {
     this._consecutiveFailures = 0;
     this._retryTimer = null;
     this._eavesdropper = false;
+    this._roundAbort = null;
+    this._deadlineTimer = null;
+    this._isInitiator = false;
+    this._pendingRoundStart = false;
   }
 
   /**
@@ -81,8 +96,17 @@ export class BB84Orchestrator {
 
   /**
    * Initialize the multiplexer. Call once on data-channel-open.
+   *
+   * @param {boolean} [isInitiator] - whether this side initiates rounds (the
+   *   room creator, Alice). The initiator announces rounds and ignores
+   *   incoming round-starts; the joiner only ever runs rounds the initiator
+   *   announced.
    */
-  init() {
+  init(isInitiator = false) {
+    if (this._mux) this._mux.close();
+    this._roundInProgress = false;
+    this._pendingRoundStart = false;
+    this._isInitiator = !!isInitiator;
     this._mux = new DataChannelMux((data) => this._webrtc.sendData(data));
     this._listenForRoundStarts();
   }
@@ -99,11 +123,26 @@ export class BB84Orchestrator {
   async _listenForRoundStarts() {
     const mux = this._mux;
     while (this._mux === mux) {
-      const msg = await mux.receive('control');
-      if (msg && msg.type === 'round-start' && !this._roundInProgress) {
-        // The announcing peer runs as Alice; this side joins as Bob.
-        this.runRound(false);
+      let msg;
+      try {
+        msg = await mux.receive('control');
+      } catch {
+        return; // mux closed by destroy()/re-init — listener is done
       }
+      if (!msg || msg.type !== 'round-start') continue;
+      // The initiator never follows round-starts: it announces them. Without
+      // this guard a hostile peer could inject a round-start and wedge the
+      // initiator into a Bob-role round against its own announcements.
+      if (this._isInitiator) continue;
+      if (this._roundInProgress) {
+        // Don't discard: the announcing side has already started its half.
+        // Run one deferred round when the current one settles, so a
+        // re-key colliding with a retry converges instead of deadlocking.
+        this._pendingRoundStart = true;
+        continue;
+      }
+      // The announcing peer runs as Alice; this side joins as Bob.
+      this.runRound(false);
     }
   }
 
@@ -122,17 +161,33 @@ export class BB84Orchestrator {
   async runRound(isAlice) {
     if (this._roundInProgress || !this._mux) return;
     this._roundInProgress = true;
-    if (isAlice) this._mux.send('control', { type: 'round-start' });
+    if (isAlice) {
+      this._isInitiator = true;
+      // Anything still buffered belongs to an older (timed-out) round and
+      // would desync this one; the peer flushes on the round-start arrival.
+      this._mux.flushDataBuffers();
+      this._mux.send('control', { type: 'round-start' });
+    }
     this._onStateChange({ phase: 'running' });
 
+    this._roundAbort = new AbortController();
+    const signal = this._roundAbort.signal;
+    this._deadlineTimer = setTimeout(() => {
+      this._roundAbort?.abort('timeout');
+    }, roundDeadlineMs());
+
     try {
-      const cc = new DataChannelClassicalChannel(this._mux);
+      const cc = new DataChannelClassicalChannel(this._mux, signal);
       const qc = isAlice
-        ? new AliceQuantumChannel(this._mux, {
-            ...CHANNEL_OPTIONS,
-            eavesdropperEnabled: this._eavesdropper,
-          })
-        : new BobQuantumChannel(this._mux);
+        ? new AliceQuantumChannel(
+            this._mux,
+            {
+              ...CHANNEL_OPTIONS,
+              eavesdropperEnabled: this._eavesdropper,
+            },
+            signal,
+          )
+        : new BobQuantumChannel(this._mux, signal);
 
       const protocol = new BB84Protocol(qc, cc, {
         ...PROTOCOL_OPTIONS,
@@ -167,18 +222,34 @@ export class BB84Orchestrator {
       this._onStateChange({ phase: 'error', error: err });
       this._scheduleRetry(isAlice);
     } finally {
+      clearTimeout(this._deadlineTimer);
+      this._roundAbort = null;
       this._roundInProgress = false;
+      if (this._pendingRoundStart && this._mux) {
+        this._pendingRoundStart = false;
+        if (!this._isInitiator) this.runRound(false);
+      }
     }
   }
 
-  /** Cancel any pending retry and stop the control listener. */
+  /**
+   * Tear down: cancel any pending retry and round deadline, abort the
+   * in-flight round, and close the mux so every pending receive (protocol
+   * reads and the control listener) rejects instead of hanging forever.
+   */
   destroy() {
     clearTimeout(this._retryTimer);
+    clearTimeout(this._deadlineTimer);
+    this._roundAbort?.abort('destroyed');
+    if (this._mux) this._mux.close();
     this._mux = null;
+    this._roundInProgress = false;
+    this._pendingRoundStart = false;
   }
 
   /** @private */
   _scheduleRetry(isAlice) {
+    if (!this._mux) return; // destroyed mid-round — nothing to retry
     if (this._consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
       // No more retries — the UI must show this loudly (permanent red pill),
       // not leave a stale "encrypting" state on screen.

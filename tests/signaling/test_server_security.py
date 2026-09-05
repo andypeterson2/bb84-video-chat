@@ -9,7 +9,7 @@ Covers the hardening added in the 2026-09 security round:
 
 import pytest
 
-from signaling.server import _check_origin, create_app
+from signaling.server import _check_origin, _parse_cors, create_app
 from signaling.throttle import RateLimiter
 
 ADMIN_HEADERS = {"X-Admin-Secret": "test-admin-secret"}
@@ -62,6 +62,32 @@ class TestAdminAuth:
         resp = flask_app.test_client().get("/admin/status", headers=ADMIN_HEADERS)
         assert resp.status_code == 404
 
+    def test_guard_404_matches_framework_404_shape(self):
+        """The guard's 404 must be indistinguishable from a missing route."""
+        flask_app, _, _ = create_app()
+        client = flask_app.test_client()
+        guarded = client.get("/admin/status", headers={"X-Admin-Secret": "wrong"})
+        real = client.get("/no/such/route")
+        assert guarded.status_code == real.status_code == 404
+        assert guarded.get_json() == real.get_json()
+
+    def test_wrong_secret_is_throttled_and_logged(self, monkeypatch, caplog):
+        monkeypatch.setenv("QVC_RATE_LIMIT", "3")
+        flask_app, sio, rooms = create_app()
+        client = flask_app.test_client()
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="signaling.server"):
+            for _ in range(4):
+                client.get("/admin/status", headers={"X-Admin-Secret": "wrong"})
+        assert any("wrong secret" in r.message for r in caplog.records)
+        # The guesses drained the shared per-IP bucket: signaling actions from
+        # the same address are now refused.
+        emitted = []
+        sio.emit = lambda *a, **kw: emitted.append(a)
+        handler = sio.handlers["/"]["connect"]
+        assert handler("sid-probe", {"REMOTE_ADDR": "127.0.0.1"}) is False
+
     def test_health_and_api_stay_open(self):
         flask_app, _, _ = create_app()
         client = flask_app.test_client()
@@ -109,6 +135,21 @@ class TestCORSAnchoring:
     def test_rejected_origins(self, origin):
         assert not _check_origin(origin)
 
+    def test_legacy_port_wildcard_translated_to_anchored_regex(self, caplog):
+        """Old deployments may still set "http://localhost:*"; it must keep
+        admitting any localhost port without re-opening the prefix-match hole."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="signaling.server"):
+            entries, regexes, exact = _parse_cors("http://localhost:*,https://andypeterson.dev")
+        assert any("legacy port wildcard" in r.message for r in caplog.records)
+        assert exact == {"https://andypeterson.dev"}
+        assert "http://localhost:*" not in entries  # nothing legacy survives
+        assert any(rx.match("http://localhost:3000") for rx in regexes)
+        assert any(rx.match("http://localhost") for rx in regexes)
+        assert not any(rx.match("http://localhostevil.com") for rx in regexes)
+        assert not any(rx.match("http://localhost:3000.evil.com") for rx in regexes)
+
     def test_flask_rejects_evil_origin(self):
         flask_app, _, _ = create_app()
         resp = flask_app.test_client().get(
@@ -146,6 +187,26 @@ class TestRateLimiter:
         tokens, last = limiter._buckets["ip"]
         limiter._buckets["ip"] = (tokens, last - 2.0)
         assert limiter.allow("ip")
+
+    def test_idle_buckets_swept_on_schedule(self):
+        limiter = RateLimiter(rate=5, per=60.0)
+        for i in range(100):
+            limiter.allow(f"ip{i}")
+        assert len(limiter._buckets) == 100
+        # Age every bucket past the refill horizon and force the next sweep.
+        limiter._buckets = {k: (t, last - 120.0) for k, (t, last) in limiter._buckets.items()}
+        limiter._next_sweep = 0.0
+        limiter.allow("fresh")
+        assert set(limiter._buckets) == {"fresh"}
+
+    def test_bucket_count_is_capped(self, monkeypatch):
+        """A key-varying flood (e.g. spoofed XFF on a misconfigured deploy)
+        must not grow memory without bound between sweeps."""
+        monkeypatch.setattr("signaling.throttle._MAX_BUCKETS", 50)
+        limiter = RateLimiter(rate=5, per=3600.0)
+        for i in range(200):
+            limiter.allow(f"ip{i}")
+        assert len(limiter._buckets) <= 50
 
 
 class TestServerThrottling:
@@ -185,8 +246,22 @@ class TestServerThrottling:
         assert any("Rate limit" in e["data"]["message"] for e in errors)
         assert rooms.room_count == 0
 
-    def test_xff_first_hop_used_behind_proxy(self, monkeypatch):
+    def test_xff_ignored_by_default(self, monkeypatch):
+        """Without QVC_TRUSTED_PROXIES, XFF is attacker-controlled — a spoofed
+        per-request "client IP" must not mint a fresh rate-limit bucket."""
         monkeypatch.setenv("QVC_RATE_LIMIT", "1")
+        _, sio, rooms = create_app()
+        sio.emit = lambda *a, **kw: None
+
+        environ_a = {"HTTP_X_FORWARDED_FOR": "1.2.3.4", "REMOTE_ADDR": "10.0.0.9"}
+        environ_b = {"HTTP_X_FORWARDED_FOR": "5.6.7.8", "REMOTE_ADDR": "10.0.0.9"}
+        assert FakePeer("sid1", sio, environ_a).connect() is not False
+        # Different spoofed XFF, same real address: same bucket, throttled.
+        assert FakePeer("sid2", sio, environ_b).connect() is False
+
+    def test_xff_client_hop_used_behind_trusted_proxy(self, monkeypatch):
+        monkeypatch.setenv("QVC_RATE_LIMIT", "1")
+        monkeypatch.setenv("QVC_TRUSTED_PROXIES", "1")
         _, sio, rooms = create_app()
         sio.emit = lambda *a, **kw: None
 
@@ -196,6 +271,23 @@ class TestServerThrottling:
         # Same proxy REMOTE_ADDR but a different client hop — its own bucket.
         assert FakePeer("sid2", sio, environ_b).connect() is not False
         assert FakePeer("sid3", sio, environ_a).connect() is False
+
+    def test_xff_takes_nth_hop_from_right(self, monkeypatch):
+        """Behind two proxies, only the second-from-right XFF entry is trusted;
+        anything the client prepends to the chain is ignored."""
+        from signaling.server import _client_ip
+
+        monkeypatch.setenv("QVC_TRUSTED_PROXIES", "2")
+        environ = {
+            "HTTP_X_FORWARDED_FOR": "6.6.6.6, 1.2.3.4, 10.0.0.5",
+            "REMOTE_ADDR": "10.0.0.9",
+        }
+        assert _client_ip(environ) == "1.2.3.4"
+        # Chain shorter than the proxy count: something is misconfigured or
+        # forged — fall back to the socket address.
+        assert _client_ip({"HTTP_X_FORWARDED_FOR": "1.2.3.4", "REMOTE_ADDR": "10.0.0.9"}) == (
+            "10.0.0.9"
+        )
 
 
 class TestJoinErrorRedaction:
@@ -213,3 +305,26 @@ class TestJoinErrorRedaction:
         errors = [c for c in captured if c["event"] == "error"]
         assert len(errors) == 1
         assert "SECRET-TOKEN-GUESS" not in errors[0]["data"]["message"]
+
+
+class TestLogRedaction:
+    """Server logs must never contain a full room token or sid."""
+
+    def test_lifecycle_logs_redact_identifiers(self, caplog):
+        import logging
+
+        _, sio, rooms = create_app()
+        sio.emit = lambda *a, **kw: None
+        peer = FakePeer("sid-abcdef123456", sio, {"REMOTE_ADDR": "10.1.1.1"})
+        with caplog.at_level(logging.INFO, logger="signaling.server"):
+            peer.connect()
+            peer.emit_event("create_room")
+            room = rooms.get_peer_room("sid-abcdef123456")
+            assert room is not None  # sanity: the room really exists
+            room_id = room.room_id
+            handler = sio.handlers["/"]["disconnect"]
+            handler("sid-abcdef123456")
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert joined  # sanity: the lifecycle actually logged something
+        assert "sid-abcdef123456" not in joined
+        assert room_id not in joined

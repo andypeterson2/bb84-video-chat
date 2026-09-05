@@ -7,6 +7,15 @@
 
 import { SimulatedQuantumChannel } from './simulated.js';
 
+/** A receive cancelled by teardown or a round deadline — NOT peer data. */
+export class MuxAbortError extends Error {
+  constructor(message, reason) {
+    super(message);
+    this.name = 'MuxAbortError';
+    this.reason = reason;
+  }
+}
+
 // Only these logical channels exist; anything else in a message is discarded.
 const CHANNEL_NAMES = new Set(['quantum', 'classical', 'control']);
 // A peer can flood messages faster than the protocol consumes them; cap the
@@ -35,6 +44,39 @@ export class DataChannelMux {
     this._queues = {};
     this._chunkId = 0;
     this._partial = null; // { id, total, parts: string[] }
+    this._closed = false;
+  }
+
+  /**
+   * Tear the mux down: every pending receive rejects with MuxAbortError and
+   * all future receives reject immediately. Without this, a waiter parked on
+   * a channel the peer will never write again is suspended forever — pinning
+   * the round, the orchestrator, and everything their closures reference.
+   */
+  close() {
+    this._closed = true;
+    for (const q of Object.values(this._queues)) {
+      const waiters = q.waiters.splice(0);
+      for (const w of waiters) {
+        w.cleanup?.();
+        w.reject(new MuxAbortError('mux closed', 'destroyed'));
+      }
+    }
+  }
+
+  /**
+   * Drop buffered-but-unread quantum/classical messages (waiters are kept).
+   *
+   * The DataChannel is ordered, so a control message (round-start) delimits
+   * rounds: any data message still buffered when one arrives predates the
+   * round being announced and would poison it — a stale qubit payload shifts
+   * every positional read one round behind, and the desync never heals. The
+   * initiator flushes its own side the same way before announcing.
+   */
+  flushDataBuffers() {
+    for (const name of ['quantum', 'classical']) {
+      if (this._queues[name]) this._queues[name].buffer.length = 0;
+    }
   }
 
   /**
@@ -65,16 +107,40 @@ export class DataChannelMux {
 
   /**
    * Receive the next message on a named channel (async, queued).
+   *
+   * An optional AbortSignal bounds the wait: aborting rejects the promise
+   * with MuxAbortError instead of leaving it suspended forever. Every
+   * protocol read runs under the orchestrator's per-round deadline signal,
+   * so a peer that goes silent (crash, one-sided abort, dropped message)
+   * converges on a failed round rather than a permanent hang.
+   *
    * @param {string} channelName
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<*>}
    */
-  receive(channelName) {
+  receive(channelName, { signal } = {}) {
+    if (this._closed) {
+      return Promise.reject(new MuxAbortError('mux closed', 'destroyed'));
+    }
     const q = this._getQueue(channelName);
     if (q.buffer.length > 0) {
       return Promise.resolve(q.buffer.shift());
     }
-    return new Promise((resolve) => {
-      q.waiters.push(resolve);
+    if (signal?.aborted) {
+      return Promise.reject(new MuxAbortError('receive aborted', signal.reason));
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, cleanup: null };
+      if (signal) {
+        const onAbort = () => {
+          const i = q.waiters.indexOf(waiter);
+          if (i >= 0) q.waiters.splice(i, 1);
+          reject(new MuxAbortError('receive aborted', signal.reason));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        waiter.cleanup = () => signal.removeEventListener('abort', onAbort);
+      }
+      q.waiters.push(waiter);
     });
   }
 
@@ -103,9 +169,12 @@ export class DataChannelMux {
       return;
     }
     if (!CHANNEL_NAMES.has(msg.ch)) return;
+    if (msg.ch === 'control') this.flushDataBuffers();
     const q = this._getQueue(msg.ch);
     if (q.waiters.length > 0) {
-      q.waiters.shift()(msg.payload);
+      const waiter = q.waiters.shift();
+      waiter.cleanup?.();
+      waiter.resolve(msg.payload);
     } else if (q.buffer.length < MAX_BUFFERED_MESSAGES) {
       q.buffer.push(msg.payload);
     }
@@ -173,9 +242,11 @@ export class AliceQuantumChannel {
   /**
    * @param {DataChannelMux} mux
    * @param {object} [simOptions] - options for SimulatedQuantumChannel
+   * @param {AbortSignal} [signal] - per-round deadline/teardown signal
    */
-  constructor(mux, simOptions = {}) {
+  constructor(mux, simOptions = {}, signal = undefined) {
     this._mux = mux;
+    this._signal = signal;
     this._sim = new SimulatedQuantumChannel(simOptions);
     this._receiver = this._sim.createReceiver();
   }
@@ -196,7 +267,7 @@ export class AliceQuantumChannel {
   }
 
   async receiveQubits() {
-    return this._mux.receive('quantum');
+    return this._mux.receive('quantum', { signal: this._signal });
   }
 }
 
@@ -205,9 +276,13 @@ export class AliceQuantumChannel {
  * over the DataChannel.
  */
 export class BobQuantumChannel {
-  /** @param {DataChannelMux} mux */
-  constructor(mux) {
+  /**
+   * @param {DataChannelMux} mux
+   * @param {AbortSignal} [signal] - per-round deadline/teardown signal
+   */
+  constructor(mux, signal = undefined) {
     this._mux = mux;
+    this._signal = signal;
   }
 
   async sendQubits(qubits) {
@@ -216,7 +291,7 @@ export class BobQuantumChannel {
 
   /** @returns {Promise<Array<{bit: number, basis: number, detected: boolean}>>} */
   async receiveQubits() {
-    return this._mux.receive('quantum');
+    return this._mux.receive('quantum', { signal: this._signal });
   }
 }
 
@@ -224,9 +299,13 @@ export class BobQuantumChannel {
  * ClassicalChannel adapter — wraps the mux's 'classical' channel.
  */
 export class DataChannelClassicalChannel {
-  /** @param {DataChannelMux} mux */
-  constructor(mux) {
+  /**
+   * @param {DataChannelMux} mux
+   * @param {AbortSignal} [signal] - per-round deadline/teardown signal
+   */
+  constructor(mux, signal = undefined) {
     this._mux = mux;
+    this._signal = signal;
   }
 
   async send(data) {
@@ -234,6 +313,6 @@ export class DataChannelClassicalChannel {
   }
 
   async receive() {
-    return this._mux.receive('classical');
+    return this._mux.receive('classical', { signal: this._signal });
   }
 }

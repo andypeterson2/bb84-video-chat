@@ -313,6 +313,15 @@ export class BB84Protocol {
         this._phase('abort', { reason: 'protocol-error', detail: err.message });
         return { key: null, qber: 0, metrics, abortReason: 'protocol-error' };
       }
+      // An aborted mux receive (round deadline or teardown) is a liveness
+      // event, not a peer fault or a bug: fail the round cleanly so the
+      // orchestrator's retry/exhausted machinery applies.
+      if (err && err.name === 'MuxAbortError') {
+        const metrics = new BB84Metrics();
+        metrics.isSecure = false;
+        this._phase('abort', { reason: 'timeout', detail: err.message });
+        return { key: null, qber: 0, metrics, abortReason: 'timeout' };
+      }
       throw err;
     }
   }
