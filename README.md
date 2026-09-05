@@ -81,7 +81,7 @@ pip install pytest
 python -m pytest tests/signaling/ -v
 ```
 
-80 tests: room management unit tests, signaling flow integration tests (including connection loss and clean teardown scenarios), and security tests (admin auth, CORS anchoring, rate limiting). Run from the repo root (`pytest.ini` lives there).
+88 tests: room management unit tests, signaling flow integration tests (including connection loss and clean teardown scenarios), and security tests (admin auth and its framework-identical 404, CORS anchoring + legacy-wildcard migration, rate limiting incl. X-Forwarded-For trust rules, and log redaction). Run from the repo root (`pytest.ini` lives there).
 
 ### JavaScript (crypto, BB84, metrics)
 
@@ -90,7 +90,7 @@ npm install
 npm test
 ```
 
-67 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, key-budget aborts, typed-message enforcement, and adversarial-peer aborts), DataChannel mux hardening, metrics collector, and signaling client.
+90 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, key-budget aborts, typed-message enforcement, adversarial-peer aborts, round deadlines/teardown liveness, and stale-queue recovery), DataChannel mux hardening, the WebRTC renegotiation guard, app rendering (cipher pill states, invite flow, room-token parsing), metrics collector, and signaling client.
 
 ## Project Structure
 

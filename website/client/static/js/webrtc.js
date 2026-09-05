@@ -89,6 +89,9 @@ export class WebRTCManager {
    * @param {number} keyIndex - Key rotation index.
    */
   setEncryptionKey(rawKey, keyIndex) {
+    // Without RTCRtpScriptTransform there is no transform to key: posting
+    // set-key would flip the UI to "encrypted" while media flows in the clear.
+    if (this._transformsUnsupported) return;
     if (this._encryptWorker) {
       this._encryptWorker.postMessage({ type: 'set-key', rawKey, keyIndex });
     }
@@ -212,6 +215,15 @@ export class WebRTCManager {
 
     // Set up encryption worker if needed
     if (this._enableEncryption) {
+      // Probe transform support before anything else: on a browser without
+      // RTCRtpScriptTransform the sender/receiver transforms silently never
+      // attach, so the pipeline would run UNENCRYPTED while the worker (and
+      // pill) claim otherwise. Fail loudly instead and never accept a key.
+      if (typeof RTCRtpScriptTransform === 'undefined') {
+        this._transformsUnsupported = true;
+        this._emit('cipher-state', { state: 'unsupported' });
+        return;
+      }
       if (this._encryptWorker) this._encryptWorker.terminate();
       // Relative to this module (static/js/), so it resolves under any deploy
       // root — the old absolute '/js/…' 404'd on the Pages deployment, and a

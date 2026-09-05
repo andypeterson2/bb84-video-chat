@@ -22,7 +22,6 @@ const state = {
   qber: null,
   qberHistory: [],
   keyBudget: 0,
-  encryptionEnabled: false,
   keyIndex: null,
   // Worker-reported cipher truth: 'establishing' | 'encrypted' | 'unencrypted'
   // | 'compromised' (re-key exhausted; last good key still active). Driven only
@@ -97,10 +96,10 @@ function connectToSignaling(url) {
 
   Promise.all([import('./js/webrtc.js'), import('./js/bb84/orchestrator.js')]).then(
     ([{ WebRTCManager }, { BB84Orchestrator }]) => {
-      // Attach the Insertable Streams transforms up front. The crypto worker passes
-      // frames through in the clear until BB84 delivers a key, then encrypts with no
-      // renegotiation. (Constructing with `false` never created the worker at all, so
-      // a derived key had nowhere to go — which is why encryption never engaged.)
+      // Attach the Insertable Streams transforms up front. The crypto worker is
+      // FAIL-CLOSED: it drops every frame until BB84 delivers a key, then encrypts
+      // with no renegotiation. (Constructing with `false` never created the worker
+      // at all, so a derived key had nowhere to go — encryption never engaged.)
       webrtcManager = new WebRTCManager(socket, { enableEncryption: true });
 
       // stepDelayMs paces the pipeline so each phase is visible on camera — a raw
@@ -160,17 +159,27 @@ function connectToSignaling(url) {
         if (msg.state === 'encrypting') {
           state.cipherState = 'encrypted';
           state.keyIndex = msg.keyIndex;
-          state.encryptionEnabled = true;
         } else if (msg.state === 'worker-error') {
           state.cipherState = 'unencrypted';
           showToast('Encryption worker failed — media is blocked, not sent in the clear.');
+        } else if (msg.state === 'unsupported') {
+          // This browser has no RTCRtpScriptTransform: frames CANNOT be
+          // encrypted, and pretending otherwise is exactly the lie the
+          // fail-closed design exists to prevent.
+          state.cipherState = 'unsupported';
+          showToast('This browser cannot encrypt media frames — no key will be used.');
         } else if (msg.state === 'keyless') {
           // The worker is dropping frames. Before the first key that is the
           // normal establishing window; after one it means the keyed worker
           // was replaced — a downgrade, shown loudly.
-          state.cipherState = state.encryptionEnabled ? 'unencrypted' : 'establishing';
+          state.cipherState = hasBeenEncrypted() ? 'unencrypted' : 'establishing';
         }
         render();
+      });
+      // Aggregated by the worker (at most one message per second). A burst of
+      // failures during a re-key is normal; a sustained stream is not.
+      webrtcManager.on('decrypt-error', (msg) => {
+        console.warn(`Frame decrypt failures in the last interval: ${msg.failures ?? 1}`);
       });
     },
   );
@@ -206,7 +215,6 @@ function handleBB84State(s) {
     state.qberHistory.push(s.qber);
     state.keyBudget = (s.metrics && s.metrics.keyLength) || 0;
     state.keyIndex = s.keyIndex;
-    state.encryptionEnabled = true;
     state.pipeline.forEach((st) => {
       if (st.status !== 'failed') st.status = 'done';
     });
@@ -411,17 +419,30 @@ function handleCreateRoom() {
   });
 }
 
-/** Extract the room token from a pasted invite link, or pass a bare token through. */
+/** Whether a key was ever installed this session (derived, not tracked). */
+function hasBeenEncrypted() {
+  return state.keyIndex !== null;
+}
+
+/**
+ * Extract the room token from a pasted invite link, a bare fragment, or a
+ * bare token. The one parser for both the page-load bootstrap and the Join
+ * form. Tokens are url-safe base64 from secrets.token_urlsafe (>= 16 chars);
+ * anything after the first invalid character (trailing prose, punctuation a
+ * chat client glued on) is trimmed, and a short/invalid candidate yields ''.
+ */
 function parseRoomToken(text) {
-  const marker = text.indexOf('#room=');
+  let candidate = text || '';
+  const marker = candidate.indexOf('#room=');
   if (marker !== -1) {
     try {
-      return decodeURIComponent(text.slice(marker + '#room='.length));
+      candidate = decodeURIComponent(candidate.slice(marker + '#room='.length));
     } catch {
       return '';
     }
   }
-  return text;
+  const token = candidate.trim().match(/^[A-Za-z0-9_-]{16,}/);
+  return token ? token[0] : '';
 }
 
 function handleJoinRoom(e) {
@@ -460,7 +481,6 @@ function resetSession() {
   state.qberHistory = [];
   state.keyBudget = 0;
   state.keyIndex = null;
-  state.encryptionEnabled = false;
   state.cipherState = 'establishing';
   state.joinLink = '';
   state.eavesdropper = false;
@@ -525,6 +545,7 @@ function cipherPill() {
     },
     unencrypted: { mod: 'unencrypted', label: 'NOT ENCRYPTED — media blocked' },
     compromised: { mod: 'unencrypted', label: 'RE-KEY FAILED — channel suspect' },
+    unsupported: { mod: 'unencrypted', label: 'ENCRYPTION UNSUPPORTED (browser)' },
   };
   const v = views[state.cipherState] || views.establishing;
   return `<span class="cipher-pill cipher-pill--${v.mod}">${v.label}</span>`;
@@ -537,6 +558,9 @@ function render() {
   const inCall = state.peerConnected;
 
   if (!inCall) {
+    // Re-renders happen while the user types (signaling status, toasts); read
+    // the field back first so innerHTML replacement never eats their input.
+    const typedRoomValue = document.getElementById('room-input')?.value ?? '';
     app.innerHTML = `
       <div class="header">
         <h1>QKD Video Chat</h1>
@@ -569,7 +593,15 @@ function render() {
     const invite = document.getElementById('invite-link');
     if (invite) invite.value = state.joinLink;
     const roomInput = document.getElementById('room-input');
-    if (roomInput && pendingRoomToken) roomInput.value = pendingRoomToken;
+    if (roomInput) {
+      if (typedRoomValue) {
+        roomInput.value = typedRoomValue;
+      } else if (pendingRoomToken) {
+        // Invite-link prefill applies once, and never over the user's typing.
+        roomInput.value = pendingRoomToken;
+        pendingRoomToken = '';
+      }
+    }
     if (localStream) {
       const v = document.getElementById('local-video');
       if (v) {
@@ -610,7 +642,6 @@ function render() {
               <div class="qd-metric"><span class="qd-metric-value ${state.qber !== null && state.qber > QBER_THRESHOLD ? 'qd-metric--danger' : state.qber !== null && state.qber > QBER_WARNING ? 'qd-metric--warning' : ''}">${state.qber !== null ? (state.qber * 100).toFixed(1) + '%' : '--'}</span><span class="qd-metric-label">QBER</span></div>
               <div class="qd-metric"><span class="qd-metric-value">${state.qberHistory.length}</span><span class="qd-metric-label">Rounds</span></div>
               <div class="qd-metric"><span class="qd-metric-value">${state.keyBudget}</span><span class="qd-metric-label">Key bits</span></div>
-              <div class="qd-metric"><span class="qd-metric-value">${state.encryptionEnabled ? 'ON' : '--'}</span><span class="qd-metric-label">AES-GCM${state.keyIndex !== null ? ` #${state.keyIndex}` : ''}</span></div>
             </div>
             <canvas id="qd-chart" class="qd-chart"></canvas>
             ${state.isInitiator ? `<button class="qd-eve-btn ${state.eavesdropper ? 'qd-eve-btn--active' : ''}" onclick="toggleEavesdropper()">${state.eavesdropper ? 'Eavesdropper active — click to remove' : 'Simulate eavesdropper'}</button>` : ''}`
@@ -640,14 +671,7 @@ function render() {
 /* ── Init ───────────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
   setTheme(getTheme());
-  const hashMatch = window.location.hash.match(/^#room=(.+)$/);
-  if (hashMatch) {
-    try {
-      pendingRoomToken = decodeURIComponent(hashMatch[1]);
-    } catch {
-      pendingRoomToken = '';
-    }
-  }
+  pendingRoomToken = parseRoomToken(window.location.hash);
   connectToSignaling(window.QVC_SIGNALING_URL || window.location.origin);
   render();
 });

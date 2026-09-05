@@ -11,13 +11,60 @@
  * Communication with main thread:
  *   - in:  { type: 'set-key', rawKey: Uint8Array, keyIndex: number }
  *   - out: { type: 'cipher-state', state: 'keyless'|'encrypting', keyIndex? }
- *   - out: { type: 'metrics', encryptLatencyUs / decryptLatencyUs }
- *   - out: { type: 'decrypt-error' }
+ *   - out: { type: 'metrics', ...aggregated counters, at most one per second }
+ *   - out: { type: 'decrypt-error', failures } (debounced, at most one per second)
  */
 
+// Key ring: the current key plus its predecessor, selected per-frame by the
+// keyIndex the sender wrote into the frame header. During a re-key the two
+// sides never switch on the same frame; with a single key slot every frame
+// sent under the other epoch failed auth and the video froze at each re-key.
+const KEY_RING_SIZE = 2;
+const keyRing = new Map(); // keyIndex -> CryptoKey
 let currentKey = null;
 let currentKeyIndex = 0;
 let announcedKeyless = false;
+
+// Per-frame postMessage fanout (2 messages per frame at 30-60 fps per
+// direction) measurably loads the main thread; aggregate and report 1/s.
+const REPORT_INTERVAL_MS = 1000;
+const stats = {
+  encryptFrames: 0,
+  encryptLatencyTotalUs: 0,
+  decryptFrames: 0,
+  decryptLatencyTotalUs: 0,
+  decryptFailures: 0,
+};
+let lastReportAt = 0;
+let lastErrorAt = -Infinity;
+
+function maybeReport() {
+  const now = performance.now();
+  if (now - lastReportAt < REPORT_INTERVAL_MS) return;
+  lastReportAt = now;
+  self.postMessage({
+    type: 'metrics',
+    encryptFrames: stats.encryptFrames,
+    decryptFrames: stats.decryptFrames,
+    encryptLatencyUs: stats.encryptFrames ? stats.encryptLatencyTotalUs / stats.encryptFrames : 0,
+    decryptLatencyUs: stats.decryptFrames ? stats.decryptLatencyTotalUs / stats.decryptFrames : 0,
+    decryptFailures: stats.decryptFailures,
+  });
+  stats.encryptFrames = 0;
+  stats.encryptLatencyTotalUs = 0;
+  stats.decryptFrames = 0;
+  stats.decryptLatencyTotalUs = 0;
+  stats.decryptFailures = 0;
+}
+
+function noteDecryptFailure() {
+  stats.decryptFailures++;
+  const now = performance.now();
+  if (now - lastErrorAt >= REPORT_INTERVAL_MS) {
+    lastErrorAt = now;
+    self.postMessage({ type: 'decrypt-error', failures: stats.decryptFailures });
+  }
+}
 
 /**
  * Import a raw AES-128-GCM key.
@@ -57,8 +104,9 @@ async function encryptFrame(frame, controller) {
   result.set(new Uint8Array(ciphertext), 14);
   frame.data = result.buffer;
 
-  const latencyUs = (performance.now() - t0) * 1000;
-  self.postMessage({ type: 'metrics', encryptLatencyUs: latencyUs });
+  stats.encryptFrames++;
+  stats.encryptLatencyTotalUs += (performance.now() - t0) * 1000;
+  maybeReport();
 
   controller.enqueue(frame);
 }
@@ -81,20 +129,31 @@ async function decryptFrame(frame, controller) {
     return;
   }
 
+  // Select the key the SENDER used (header keyIndex), not whatever this side
+  // installed last — the two sides never re-key on the same frame boundary.
+  const frameKeyIndex = view[0] | (view[1] << 8);
+  const key = keyRing.get(frameKeyIndex);
+  if (!key) {
+    // Outside the ring: either far ahead (we missed a re-key) or long stale.
+    noteDecryptFailure();
+    return;
+  }
+
   const iv = view.slice(2, 14);
   const ciphertext = view.slice(14);
 
   try {
-    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, currentKey, ciphertext);
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
     frame.data = plaintext;
 
-    const latencyUs = (performance.now() - t0) * 1000;
-    self.postMessage({ type: 'metrics', decryptLatencyUs: latencyUs });
+    stats.decryptFrames++;
+    stats.decryptLatencyTotalUs += (performance.now() - t0) * 1000;
+    maybeReport();
 
     controller.enqueue(frame);
   } catch {
     // Decryption failed — drop the frame (GCM auth tag mismatch)
-    self.postMessage({ type: 'decrypt-error' });
+    noteDecryptFailure();
   }
 }
 
@@ -105,6 +164,12 @@ self.onmessage = async (event) => {
   if (type === 'set-key') {
     currentKey = await importKey(rawKey);
     currentKeyIndex = keyIndex;
+    keyRing.set(keyIndex, currentKey);
+    // Keep only the newest KEY_RING_SIZE epochs (Map preserves insert order).
+    for (const idx of keyRing.keys()) {
+      if (keyRing.size <= KEY_RING_SIZE) break;
+      keyRing.delete(idx);
+    }
     announcedKeyless = false;
     self.postMessage({ type: 'cipher-state', state: 'encrypting', keyIndex });
   }
