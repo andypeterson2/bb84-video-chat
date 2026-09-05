@@ -963,3 +963,58 @@ input {
     transform: rotate(360deg);
   }
 }
+
+/* ── Cipher-state pill ─────────────────────────────────────────────
+   Always visible in-call. Reflects the crypto worker's reported state
+   (fail-closed: 'unencrypted' means frames are DROPPED, not plaintext). */
+.cipher-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.cipher-pill::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+.cipher-pill--establishing {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+}
+.cipher-pill--encrypted {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 15%, transparent);
+}
+.cipher-pill--unencrypted {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+}
+
+/* ── Invite link (capability-token rooms) ────────────────────────── */
+.invite {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+  max-width: 32rem;
+}
+.invite-link {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-family: monospace;
+  font-size: 0.85rem;
+  text-overflow: ellipsis;
+}

@@ -1,0 +1,174 @@
+/**
+ * Render tests for the CURRENT app.js UI.
+ *
+ * The predecessor suite (test_app_dom.js) targeted a copy of app.js in the
+ * parent website repo that no longer exists, so every test silently skipped —
+ * 41 tests of dead weight advertised as coverage. This suite loads the real
+ * website/client/static/app.js with the same Function-constructor technique
+ * and pins the states that matter: the lobby (invite link, join-input
+ * preservation), the cipher pill for every worker state, and the room-token
+ * parser both entry points share.
+ */
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const APP_JS_PATH = resolve(__dirname, '../../website/client/static/app.js');
+
+function setupGlobals() {
+  // app.js only touches these at connect/call time, but they must exist.
+  globalThis.io = () => ({ on: () => {}, emit: () => {}, disconnect: () => {} });
+  const ctxStub = new Proxy({}, { get: (t, prop) => (prop === 'canvas' ? {} : () => ctxStub) });
+  HTMLCanvasElement.prototype.getContext = function () {
+    return ctxStub;
+  };
+}
+
+/**
+ * Load app.js into the jsdom context. Top-level const/let become var so the
+ * trailing return can hand the internals back to the tests.
+ */
+function loadApp() {
+  let code = readFileSync(APP_JS_PATH, 'utf-8');
+  code = code.replace(/^(const|let) /gm, 'var ');
+  const script = new Function(
+    code +
+      `
+    return {
+      state, render, parseRoomToken, resetSession,
+      setPendingRoomToken: (v) => { pendingRoomToken = v; },
+      getPendingRoomToken: () => pendingRoomToken,
+    };
+  `,
+  );
+  return script();
+}
+
+let app;
+
+beforeEach(() => {
+  document.body.innerHTML = '<div id="app"></div>';
+  setupGlobals();
+  app = loadApp();
+});
+
+describe('lobby rendering', () => {
+  test('renders the lobby with a join form when not in a call', () => {
+    app.render();
+    expect(document.querySelector('.lobby')).not.toBeNull();
+    expect(document.querySelector('h1').textContent).toBe('QKD Video Chat');
+    expect(document.getElementById('room-input')).not.toBeNull();
+  });
+
+  test('invite link and copy control appear while waiting for a peer', () => {
+    app.state.joinLink = 'https://example.test/#room=abcdefghijklmnop';
+    app.state.waitingForPeer = true;
+    app.render();
+    const invite = document.getElementById('invite-link');
+    expect(invite).not.toBeNull();
+    // Set via the value sink, never innerHTML — the link is a credential.
+    expect(invite.value).toBe(app.state.joinLink);
+    expect(document.querySelector('.invite .btn')).not.toBeNull();
+  });
+
+  test('a typed room value survives a re-render', () => {
+    app.render();
+    document.getElementById('room-input').value = 'half-typed-token';
+    app.render(); // toast/status updates re-render while the user types
+    expect(document.getElementById('room-input').value).toBe('half-typed-token');
+  });
+
+  test('a pending invite token prefills the input exactly once', () => {
+    app.setPendingRoomToken('abcdefghijklmnop');
+    app.render();
+    expect(document.getElementById('room-input').value).toBe('abcdefghijklmnop');
+    expect(app.getPendingRoomToken()).toBe('');
+  });
+
+  test('a pending invite token never overwrites what the user typed', () => {
+    app.render();
+    document.getElementById('room-input').value = 'user-was-here';
+    app.setPendingRoomToken('abcdefghijklmnop');
+    app.render();
+    expect(document.getElementById('room-input').value).toBe('user-was-here');
+    // Kept for the next empty render rather than silently dropped.
+    expect(app.getPendingRoomToken()).toBe('abcdefghijklmnop');
+  });
+});
+
+describe('cipher pill', () => {
+  const pill = (cipherState) => {
+    app.state.peerConnected = true;
+    app.state.cipherState = cipherState;
+    if (cipherState === 'encrypted') app.state.keyIndex = 2;
+    app.render();
+    return document.querySelector('.cipher-pill');
+  };
+
+  test('establishing state renders the neutral pill', () => {
+    const el = pill('establishing');
+    expect(el.className).toContain('cipher-pill--establishing');
+    expect(el.textContent).toContain('Establishing');
+  });
+
+  test('encrypted state shows AES-GCM and the key index', () => {
+    const el = pill('encrypted');
+    expect(el.className).toContain('cipher-pill--encrypted');
+    expect(el.textContent).toContain('AES-GCM');
+    expect(el.textContent).toContain('#2');
+  });
+
+  test('unencrypted state is the red media-blocked pill', () => {
+    const el = pill('unencrypted');
+    expect(el.className).toContain('cipher-pill--unencrypted');
+    expect(el.textContent).toContain('NOT ENCRYPTED');
+  });
+
+  test('compromised state is red and names the re-key failure', () => {
+    const el = pill('compromised');
+    expect(el.className).toContain('cipher-pill--unencrypted');
+    expect(el.textContent).toContain('RE-KEY FAILED');
+  });
+
+  test('unsupported browser state is red and blames the browser', () => {
+    const el = pill('unsupported');
+    expect(el.className).toContain('cipher-pill--unencrypted');
+    expect(el.textContent).toContain('UNSUPPORTED');
+  });
+
+  test('the quantum panel has no separate AES-GCM tile (the pill owns it)', () => {
+    app.state.peerConnected = true;
+    app.state.bb84Active = true;
+    app.render();
+    const labels = [...document.querySelectorAll('.qd-metric-label')].map((n) => n.textContent);
+    expect(labels).toEqual(['QBER', 'Rounds', 'Key bits']);
+  });
+});
+
+describe('parseRoomToken', () => {
+  test('extracts the token from a full invite link', () => {
+    expect(app.parseRoomToken('https://example.test/chat#room=abcDEF123456789_-x')).toBe(
+      'abcDEF123456789_-x',
+    );
+  });
+
+  test('accepts a bare token', () => {
+    expect(app.parseRoomToken('  abcdefghijklmnop  ')).toBe('abcdefghijklmnop');
+  });
+
+  test('trims trailing junk a chat client glued on', () => {
+    expect(app.parseRoomToken('#room=abcdefghijklmnop%20(click%20me!)')).toBe('abcdefghijklmnop');
+    expect(app.parseRoomToken('abcdefghijklmnop.')).toBe('abcdefghijklmnop');
+  });
+
+  test('rejects short or invalid candidates', () => {
+    expect(app.parseRoomToken('tooshort')).toBe('');
+    expect(app.parseRoomToken('!!!not a token!!!')).toBe('');
+    expect(app.parseRoomToken('')).toBe('');
+  });
+
+  test('malformed percent-encoding yields empty, not an exception', () => {
+    expect(app.parseRoomToken('#room=%E0%A4%A')).toBe('');
+  });
+});

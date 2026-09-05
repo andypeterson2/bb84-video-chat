@@ -230,6 +230,75 @@ describe('BB84Protocol', () => {
     expect(bobResult.metrics.isSecure).toBe(false);
   });
 
+  test('Bob aborts on his own QBER even when a malicious Alice says continue', async () => {
+    const { qcAlice, qcBob, ccAlice, ccBob } = makeChannelPair();
+
+    // Corrupt the quantum channel so the true QBER is ~25%…
+    const originalReceive = qcBob.receiveQubits.bind(qcBob);
+    qcBob.receiveQubits = async () => {
+      const qubits = await originalReceive();
+      return qubits.map((q) => (Math.random() < 0.25 ? { ...q, bit: q.bit ^ 1 } : q));
+    };
+    // …and make Alice lie: she reports success and presses on regardless.
+    const alice = new BB84Protocol(qcAlice, ccAlice, { numRawBits: 4096, qberThreshold: 1.1 });
+    const bob = new BB84Protocol(qcBob, ccBob, { numRawBits: 4096 });
+
+    // Alice (lying) proceeds past the abort and blocks awaiting messages a
+    // correctly-aborting Bob never sends — so await Bob only.
+    void alice.runAsAlice().catch(() => {});
+    const bobResult = await bob.runAsBob();
+
+    expect(bobResult.key).toBeNull();
+    expect(bobResult.abortReason).toBe('qber-exceeded');
+    expect(bobResult.metrics.isSecure).toBe(false);
+  });
+
+  test('an injected classical message aborts cleanly as protocol-error', async () => {
+    const { qcAlice, qcBob, ccAlice, ccBob } = makeChannelPair();
+
+    // Inject one extra message ahead of Alice's bases: positionally this
+    // would have shifted every later read; typed reads catch it instead.
+    const originalReceive = ccBob.receive.bind(ccBob);
+    let injected = false;
+    ccBob.receive = async () => {
+      if (!injected) {
+        injected = true;
+        return { type: 'qber-sample', indices: [0], values: [0] };
+      }
+      return originalReceive();
+    };
+
+    const alice = new BB84Protocol(qcAlice, ccAlice, { numRawBits: 1024 });
+    const bob = new BB84Protocol(qcBob, ccBob, { numRawBits: 1024 });
+
+    void alice.runAsAlice().catch(() => {});
+    const bobResult = await bob.runAsBob();
+
+    expect(bobResult.key).toBeNull();
+    expect(bobResult.abortReason).toBe('protocol-error');
+  });
+
+  test('out-of-bounds sample indices abort as protocol-error', async () => {
+    const { qcAlice, qcBob, ccAlice, ccBob } = makeChannelPair();
+
+    const originalReceive = ccBob.receive.bind(ccBob);
+    ccBob.receive = async () => {
+      const msg = await originalReceive();
+      if (msg?.type === 'qber-sample') {
+        return { type: 'qber-sample', indices: [10_000_000], values: [0] };
+      }
+      return msg;
+    };
+
+    const alice = new BB84Protocol(qcAlice, ccAlice, { numRawBits: 1024 });
+    const bob = new BB84Protocol(qcBob, ccBob, { numRawBits: 1024 });
+    void alice.runAsAlice().catch(() => {});
+    const bobResult = await bob.runAsBob();
+
+    expect(bobResult.key).toBeNull();
+    expect(bobResult.abortReason).toBe('protocol-error');
+  });
+
   test('round aborts with key-budget when the corrected key cannot cover leakage + target', async () => {
     const { qcAlice, qcBob, ccAlice, ccBob } = makeChannelPair();
 

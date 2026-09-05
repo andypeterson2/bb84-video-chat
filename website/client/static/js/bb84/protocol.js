@@ -15,6 +15,13 @@ import { BB84Metrics } from './metrics.js';
 /** Error-correction block size — one parity bit is disclosed per block. */
 const PARITY_BLOCK_SIZE = 8;
 
+/**
+ * A classical message that failed validation (wrong type, malformed shape).
+ * The classical queue is positional, so ONE unexpected message desyncs every
+ * later read — the only safe response is to abort the round.
+ */
+class BB84ProtocolError extends Error {}
+
 export class BB84Protocol {
   constructor(quantumChannel, classicalChannel, options = {}) {
     this._qc = quantumChannel;
@@ -47,6 +54,11 @@ export class BB84Protocol {
    * @returns {{ key: Uint8Array|null, qber: number, metrics: BB84Metrics }}
    */
   async runAsAlice() {
+    return this._guarded(() => this._runAlice());
+  }
+
+  /** @private */
+  async _runAlice() {
     const metrics = new BB84Metrics();
     const startTime = Date.now();
 
@@ -66,10 +78,10 @@ export class BB84Protocol {
 
     // Step 2: Basis reconciliation — receive Bob's bases and detection events,
     // send Alice's bases
-    const bobAnnouncement = await this._cc.receive();
+    const bobAnnouncement = await this._receiveTyped(['bob-bases']);
     const bobBases = bobAnnouncement.bases;
 
-    await this._cc.send(aliceBases);
+    await this._cc.send({ type: 'alice-bases', bases: aliceBases });
 
     // Sift: keep only slots where Bob registered a photon AND the bases agree.
     // The detection filter is load-bearing — an undetected slot still carries a
@@ -93,7 +105,7 @@ export class BB84Protocol {
       values: sampleIndices.map((i) => siftedAlice[i]),
     });
 
-    const bobSample = await this._cc.receive();
+    const bobSample = await this._receiveTyped(['qber-sample-response']);
     const qber = this._estimateQber(
       sampleIndices.map((i) => siftedAlice[i]),
       bobSample.values,
@@ -164,6 +176,11 @@ export class BB84Protocol {
    * @returns {{ key: Uint8Array|null, qber: number, metrics: BB84Metrics }}
    */
   async runAsBob() {
+    return this._guarded(() => this._runBob());
+  }
+
+  /** @private */
+  async _runBob() {
     const metrics = new BB84Metrics();
     const startTime = Date.now();
 
@@ -188,8 +205,9 @@ export class BB84Protocol {
     await this._pace();
 
     // Step 2: Announce Bob's bases and detection events, receive Alice's bases
-    await this._cc.send({ bases: bobBases, detected: bobDetected });
-    const aliceBases = await this._cc.receive();
+    await this._cc.send({ type: 'bob-bases', bases: bobBases, detected: bobDetected });
+    const aliceMsg = await this._receiveTyped(['alice-bases']);
+    const aliceBases = aliceMsg.bases;
 
     // Sift — same positions Alice keeps (see runAsAlice)
     const siftedBob = this._sift(aliceBases, bobBases, bobBits, bobDetected);
@@ -198,9 +216,18 @@ export class BB84Protocol {
     this._phase('sift', { sifted: siftedBob.length, raw: this._numRawBits });
     await this._pace();
 
-    // Step 3: QBER estimation
-    const aliceSample = await this._cc.receive();
+    // Step 3: QBER estimation — validate the sample request before mapping it.
+    // Unbounded or out-of-range indices are either an attack or a desync;
+    // either way the round is dead.
+    const aliceSample = await this._receiveTyped(['qber-sample']);
     const sampleIndices = aliceSample.indices;
+    if (
+      !Array.isArray(sampleIndices) ||
+      sampleIndices.length > siftedBob.length ||
+      !sampleIndices.every((i) => Number.isInteger(i) && i >= 0 && i < siftedBob.length)
+    ) {
+      throw new BB84ProtocolError('qber-sample indices out of bounds');
+    }
     const sampleSize = sampleIndices.length;
 
     const bobSampleValues = sampleIndices.map((i) => siftedBob[i]);
@@ -222,12 +249,21 @@ export class BB84Protocol {
     // construction, so the numbers agree without negotiation).
     metrics.leakedBits = Math.ceil(keyBitsBob.length / PARITY_BLOCK_SIZE);
 
-    const decision = await this._cc.receive();
-    if (decision.type === 'abort') {
+    // Read Alice's decision first (keeps the positional queue in sync across
+    // rounds), then enforce the QBER threshold with BOB'S OWN measurement as
+    // well. BB84's security requires both parties to abort on an eavesdropped
+    // channel — a Bob who installs a key because a (possibly malicious or
+    // impersonated) Alice said 'continue' has no security at all. Both sides
+    // compute QBER over the same sample, so honest peers agree; the check
+    // only diverges when Alice is lying.
+    const decision = await this._receiveTyped(['abort', 'continue']);
+    if (decision.type === 'abort' || qber > this._qberThreshold) {
+      const abortReason =
+        decision.type === 'abort' ? (decision.reason ?? 'qber-exceeded') : 'qber-exceeded';
       metrics.isSecure = false;
-      this._phase('abort', { qber, reason: decision.reason });
+      this._phase('abort', { qber, reason: abortReason });
       metrics.roundDurationMs = Date.now() - startTime;
-      return { key: null, qber, metrics, abortReason: decision.reason ?? 'qber-exceeded' };
+      return { key: null, qber, metrics, abortReason };
     }
 
     // Step 4: Error correction
@@ -238,13 +274,9 @@ export class BB84Protocol {
     // Step 5: Privacy amplification — hash with the SAME Toeplitz matrix
     // Alice used, reconstructed from her transmitted seed. Anything else and
     // the two 128-bit keys are unrelated bit strings.
-    const toeplitzMsg = await this._cc.receive();
+    const toeplitzMsg = await this._receiveTyped(['toeplitz-seed']);
     const expectedSeedLength = correctedBob.length + this._targetKeyLength - 1;
-    if (
-      toeplitzMsg?.type !== 'toeplitz-seed' ||
-      !Array.isArray(toeplitzMsg.seed) ||
-      toeplitzMsg.seed.length !== expectedSeedLength
-    ) {
+    if (!Array.isArray(toeplitzMsg.seed) || toeplitzMsg.seed.length !== expectedSeedLength) {
       metrics.isSecure = false;
       this._phase('abort', { qber, reason: 'bad-seed' });
       metrics.roundDurationMs = Date.now() - startTime;
@@ -261,6 +293,58 @@ export class BB84Protocol {
       qber,
       metrics,
     };
+  }
+
+  /**
+   * Convert a validation failure into a clean protocol-error abort.
+   *
+   * Transport errors and bugs still throw (the orchestrator's catch handles
+   * them); only BB84ProtocolError — a peer sending something malformed —
+   * becomes a normal failed round, so the retry/backoff path applies.
+   * @private
+   */
+  async _guarded(run) {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof BB84ProtocolError) {
+        const metrics = new BB84Metrics();
+        metrics.isSecure = false;
+        this._phase('abort', { reason: 'protocol-error', detail: err.message });
+        return { key: null, qber: 0, metrics, abortReason: 'protocol-error' };
+      }
+      // An aborted mux receive (round deadline or teardown) is a liveness
+      // event, not a peer fault or a bug: fail the round cleanly so the
+      // orchestrator's retry/exhausted machinery applies.
+      if (err && err.name === 'MuxAbortError') {
+        const metrics = new BB84Metrics();
+        metrics.isSecure = false;
+        this._phase('abort', { reason: 'timeout', detail: err.message });
+        return { key: null, qber: 0, metrics, abortReason: 'timeout' };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Receive one classical message and require its type.
+   *
+   * Every classical read validates the message type: the queue is positional,
+   * so accepting an unexpected message silently shifts all later reads (an
+   * injected extra message could otherwise consume the abort decision).
+   *
+   * @param {Array<string>} expected - acceptable type values
+   * @returns {Promise<object>}
+   * @private
+   */
+  async _receiveTyped(expected) {
+    const msg = await this._cc.receive();
+    if (!msg || typeof msg !== 'object' || !expected.includes(msg.type)) {
+      throw new BB84ProtocolError(
+        `expected classical message of type ${expected.join('|')}, got ${msg?.type ?? typeof msg}`,
+      );
+    }
+    return msg;
   }
 
   /**
@@ -313,7 +397,7 @@ export class BB84Protocol {
     }
     await this._cc.send({ type: 'parities', parities });
     // Consume Bob's correction-done — positional queue sync only.
-    await this._cc.receive();
+    await this._receiveTyped(['correction-done']);
     // Alice keeps her bits (she is the reference)
     return [...bits];
   }
@@ -324,8 +408,11 @@ export class BB84Protocol {
    */
   async _errorCorrectBob(bits) {
     const blockSize = PARITY_BLOCK_SIZE;
-    const aliceParityMsg = await this._cc.receive();
+    const aliceParityMsg = await this._receiveTyped(['parities']);
     const aliceParities = aliceParityMsg.parities;
+    if (!Array.isArray(aliceParities)) {
+      throw new BB84ProtocolError('parities message malformed');
+    }
 
     const corrected = [...bits];
     for (let blockIdx = 0; blockIdx < aliceParities.length; blockIdx++) {

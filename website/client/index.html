@@ -5,11 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="QKD Video Chat — quantum-secure peer-to-peer video calling.">
     <title>QKD Video Chat</title>
-    <link rel="stylesheet" href="static/style.css">
+    <!-- ?v= cache-busters roll the CSS/JS pair over together on deploy; a
+         stale cached app.js driving a fresh crypto worker (or vice versa) is
+         a silent mixed-version hazard. Bump on release. -->
+    <link rel="stylesheet" href="static/style.css?v=2">
   </head>
   <body>
     <div id="app" class="main-screen"></div>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="static/app.js"></script>
+    <!-- Vendored socket.io-client 4.7.5 (was a CDN tag — a third party in the
+         E2E-crypto page's script chain). Provenance: cdn.socket.io + jsDelivr,
+         both matching sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO -->
+    <script src="static/vendor/socket.io-4.7.5.min.js"></script>
+    <script src="static/app.js?v=2"></script>
   </body>
 </html>

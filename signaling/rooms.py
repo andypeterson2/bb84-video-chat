@@ -10,10 +10,23 @@ import secrets
 import time
 from dataclasses import dataclass, field
 
-_ROOM_ID_LENGTH = 5
-_ROOM_ID_MIN = 10000
-_ROOM_ID_MAX = 99999
+# Room ids are unguessable capability tokens: knowing the id IS the invitation.
+# 16 bytes -> ~128 bits of entropy in a 22-char URL-safe string; the old 5-digit
+# codes (~16.6 bits) were enumerable in seconds.
+_ROOM_TOKEN_BYTES = 16
+_MAX_ID_ATTEMPTS = 8
 _MAX_PEERS_PER_ROOM = 2
+
+
+def redact(value: str | None) -> str | None:
+    """Shorten an identifier for dashboards/logs.
+
+    Room ids are join capabilities and sids address Socket.IO clients directly;
+    neither may leave the server whole except to the peers that own them.
+    """
+    if not value:
+        return None
+    return value[:4] + "\u2026"
 
 
 @dataclass
@@ -70,11 +83,14 @@ class RoomManager:
         self._max_events: int = 100
 
     def _generate_room_id(self) -> str:
-        """Generate a unique 5-digit numeric room ID."""
-        while True:
-            room_id = str(secrets.randbelow(_ROOM_ID_MAX - _ROOM_ID_MIN + 1) + _ROOM_ID_MIN)
+        """Generate a unique, unguessable URL-safe room token."""
+        for _ in range(_MAX_ID_ATTEMPTS):
+            room_id = secrets.token_urlsafe(_ROOM_TOKEN_BYTES)
             if room_id not in self._rooms:
                 return room_id
+        # 8 straight collisions at 128 bits of entropy is not chance.
+        msg = "Could not generate a unique room token"
+        raise RuntimeError(msg)
 
     def register_peer(self, sid: str) -> Peer:
         """Register a new peer connection.
@@ -202,8 +218,10 @@ class RoomManager:
         return time.monotonic() - self._start_time
 
     def log_event(self, event: str, **kwargs) -> None:
-        """Record an event for the dashboard."""
-        entry = {"timestamp": time.time(), "event": event, **kwargs}
+        """Record an event for the dashboard (identifiers stored redacted)."""
+        entry: dict = {"timestamp": time.time(), "event": event}
+        for key, value in kwargs.items():
+            entry[key] = redact(value) if key in ("sid", "room_id") else value
         self._events.append(entry)
         if len(self._events) > self._max_events:
             self._events = self._events[-self._max_events:]
@@ -213,24 +231,30 @@ class RoomManager:
         return self._events[-limit:]
 
     def get_rooms_summary(self) -> list[dict]:
-        """Return a summary of all active rooms for the dashboard."""
+        """Return a redacted summary of active rooms for the dashboard.
+
+        Full room ids are join capabilities — the dashboard gets a prefix
+        that identifies a room without granting entry, and peer counts
+        instead of sids.
+        """
         result = []
         for room_id, room in self._rooms.items():
             result.append({
-                "room_id": room_id,
-                "peers": list(room.peers),
+                "room": redact(room_id),
+                "peer_count": len(room.peers),
                 "is_full": room.is_full,
             })
         return result
 
     def get_peers_summary(self) -> list[dict]:
-        """Return a summary of all registered peers for the dashboard."""
+        """Return a redacted summary of registered peers for the dashboard."""
         result = []
         for sid, peer in self._peers.items():
             room = self._rooms.get(peer.room_id) if peer.room_id else None
+            other = room.other_peer(sid) if room else None
             result.append({
-                "sid": sid,
-                "room_id": peer.room_id,
-                "peer": room.other_peer(sid) if room else None,
+                "peer": redact(sid),
+                "room": redact(peer.room_id),
+                "paired": other is not None,
             })
         return result

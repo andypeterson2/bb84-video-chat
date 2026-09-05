@@ -50,10 +50,10 @@ Port assignments are in `.env`. Set `DEV=1` in `.env` to also serve the Astro fr
 Navigate to the page that serves `website/client/index.html`. In Docker, this is served by the Astro dev server at `localhost:4322/projects/quantum-video-chat/client/`.
 
 1. Two browser tabs → both connect to the signaling server
-2. Tab A clicks **Start Session** → gets a room code
-3. Tab B enters the room code → clicks **Join**
+2. Tab A clicks **Start Session** → gets an invite link (the room id is an unguessable capability token — the link is the credential)
+3. Tab B pastes the invite link → clicks **Join** (opening the link directly prefills it)
 4. WebRTC peer connection establishes → video flows P2P
-5. BB84 key exchange runs over DataChannel → shared key derived
+5. BB84 key exchange runs over DataChannel → shared key derived; the cipher pill turns green when the crypto worker confirms it is encrypting
 
 ## Current Status
 
@@ -65,7 +65,8 @@ This is a research demonstration, not a production QKD system.
 - **WebRTC video**: peer-to-peer video and audio between browsers
 - **BB84 key exchange**: full protocol over DataChannel — basis sifting, QBER estimation, block-parity error correction, and privacy amplification by a per-round seeded Toeplitz hash (leftover hashing): Alice draws the seed from the crypto RNG, transmits it, and both sides distill the same 128-bit key with the same matrix. Parity bits disclosed during error correction are subtracted from the key budget; a round that cannot cover the 128-bit target aborts rather than shrinking the key.
 - **Eavesdropper detection**: intercept-resend attacks raise QBER above the 11% threshold, triggering automatic key rejection and re-exchange
-- **BB84 keys drive the frame encryption**: on round completion the derived key is posted to the crypto worker (`setEncryptionKey` → `set-key`), and the AES-128-GCM Insertable Streams transforms (installed on every sender/receiver at connection setup) switch from passthrough to encrypt/decrypt. Requires `RTCRtpScriptTransform` support in the browser.
+- **BB84 keys drive the frame encryption**: on round completion the derived key is posted to the crypto worker (`setEncryptionKey` → `set-key`), and the AES-128-GCM Insertable Streams transforms (installed on every sender/receiver at connection setup) begin encrypting. The worker is **fail-closed**: until a key is installed it drops frames rather than passing them in the clear, and the in-call pill reports the worker's own state (amber establishing / green encrypted / red not-encrypted). Requires `RTCRtpScriptTransform` support in the browser.
+- **Hardened signaling**: capability-token rooms, fail-closed admin auth (`QVC_ADMIN_SECRET`), per-IP rate limiting (`QVC_RATE_LIMIT`, default 30/min), anchored CORS origins, and redacted dashboards/logs. See `docs/THREAT_MODEL.md` for the full attack-surface table.
 
 ### Simulated
 
@@ -80,7 +81,7 @@ pip install pytest
 python -m pytest tests/signaling/ -v
 ```
 
-51 tests: room management unit tests + signaling flow integration tests (including connection loss and clean teardown scenarios). Run from the repo root (`pytest.ini` lives there).
+88 tests: room management unit tests, signaling flow integration tests (including connection loss and clean teardown scenarios), and security tests (admin auth and its framework-identical 404, CORS anchoring + legacy-wildcard migration, rate limiting incl. X-Forwarded-For trust rules, and log redaction). Run from the repo root (`pytest.ini` lives there).
 
 ### JavaScript (crypto, BB84, metrics)
 
@@ -89,7 +90,7 @@ npm install
 npm test
 ```
 
-94 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, and key-budget aborts), metrics collector, signaling client, and app DOM.
+90 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, key-budget aborts, typed-message enforcement, adversarial-peer aborts, round deadlines/teardown liveness, and stale-queue recovery), DataChannel mux hardening, the WebRTC renegotiation guard, app rendering (cipher pill states, invite flow, room-token parsing), metrics collector, and signaling client.
 
 ## Project Structure
 

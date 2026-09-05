@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main, refactor]
+  # No base filter: stacked security/feature PRs (base = another branch) must
+  # gate the same way as PRs into main.
   pull_request:
-    branches: [main]
 
 env:
   QVC_DEVELOPMENT: 'true'
@@ -97,5 +98,10 @@ jobs:
             -e SIO_ASYNC_MODE=eventlet \
             -p 5050:5050 qvc-signaling
           sleep 5
-          curl -sf http://localhost:5050/admin/status || (docker logs qvc-signaling-test && exit 1)
+          # /health is unauthenticated; /admin/* is fail-closed behind QVC_ADMIN_SECRET
+          # (404 without it), so probing it would fail on a healthy server.
+          curl -sf http://localhost:5050/health || (docker logs qvc-signaling-test && exit 1)
+          # And confirm the fail-closed guard: /admin/status must 404 with no secret set.
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5050/admin/status)
+          [ "$status" = "404" ] || (echo "admin surface not fail-closed (got $status)" && exit 1)
           docker stop qvc-signaling-test

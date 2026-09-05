@@ -18,7 +18,7 @@ const USED_METHODS = ['sendData', 'setEncryptionKey'];
  * Two orchestrators wired to each other, each behind a fake WebRTCManager that
  * throws on any method access outside {@link USED_METHODS}.
  */
-function pair() {
+function pair({ bobStepDelayMs = 0 } = {}) {
   const installed = { alice: [], bob: [] };
   const states = { alice: [], bob: [] };
   const peers = {};
@@ -52,17 +52,31 @@ function pair() {
   peers.bob = new BB84Orchestrator({
     webrtcManager: transport('bob', 'alice'),
     onStateChange: (s) => states.bob.push(s),
+    stepDelayMs: bobStepDelayMs,
   });
-  peers.alice.init();
-  peers.bob.init();
+  peers.alice.init(true);
+  peers.bob.init(false);
+
+  const TERMINAL = new Set(['complete', 'failed', 'error']);
+  const settled = (side) => states[side].filter((s) => TERMINAL.has(s.phase)).length;
 
   return {
     alice: peers.alice,
     bob: peers.bob,
     installed,
     states,
-    /** Runs one round on both sides concurrently, as data-channel-open does. */
-    round: () => Promise.all([peers.alice.runRound(true), peers.bob.runRound(false)]),
+    /**
+     * Runs one round: alice initiates, bob joins via the round-start
+     * announcement — exactly how the app drives it (the joiner never
+     * self-starts). Resolves when both sides reach a terminal phase.
+     */
+    round: async () => {
+      const target = settled('bob') + 1;
+      await peers.alice.runRound(true);
+      await vi.waitFor(() => {
+        expect(settled('bob')).toBeGreaterThanOrEqual(target);
+      });
+    },
     // Clears the pending retry timers a failed round schedules.
     destroy: () => {
       peers.alice.destroy();
@@ -70,6 +84,10 @@ function pair() {
     },
   };
 }
+
+afterEach(() => {
+  delete globalThis.QVC_ROUND_DEADLINE_MS;
+});
 
 describe('BB84Orchestrator ↔ WebRTCManager contract', () => {
   test('every WebRTCManager method the orchestrator calls actually exists', () => {
@@ -193,6 +211,136 @@ describe('BB84Orchestrator live pipeline', () => {
       expect(steps).toEqual(['transmit', 'sift', 'qber', 'abort']);
       expect(steps).not.toContain('correct');
       expect(steps).not.toContain('amplify');
+    } finally {
+      p.destroy();
+    }
+  });
+});
+
+// Alice-initiated re-keys (budget-low, eavesdropper toggle) announce the round
+// over the control channel so Bob's side actually runs — without it, Alice's
+// qubits sat unread in Bob's queue and the round deadlocked.
+describe('BB84Orchestrator round-start announcements', () => {
+  test("alice alone starting a round also runs bob's side to completion", async () => {
+    const p = pair();
+    try {
+      await p.round(); // initial round, as data-channel-open would
+      await p.alice.runRound(true); // re-key initiated by alice ONLY
+      await vi.waitFor(() => {
+        expect(p.states.bob.filter((s) => s.phase === 'complete')).toHaveLength(2);
+      });
+      expect(p.installed.alice.map((k) => k.keyIndex)).toEqual([0, 1]);
+      expect(p.installed.bob.map((k) => k.keyIndex)).toEqual([0, 1]);
+    } finally {
+      p.destroy();
+    }
+  });
+});
+
+// The review's central liveness finding: every mux receive could suspend
+// forever (silent peer, injected junk, teardown mid-round), pinning the
+// orchestrator with no timeout anywhere. These pin the cancellation
+// machinery: round deadline, destroy/re-init, and round-start hygiene.
+describe('BB84Orchestrator liveness', () => {
+  /** An orchestrator whose peer never answers anything. */
+  const silent = () => {
+    const states = [];
+    const orch = new BB84Orchestrator({
+      webrtcManager: { sendData: () => {}, setEncryptionKey: () => {} },
+      onStateChange: (s) => states.push(s),
+    });
+    return { orch, states };
+  };
+
+  test('a silent peer trips the round deadline: failed round, not a hang', async () => {
+    globalThis.QVC_ROUND_DEADLINE_MS = 100;
+    const { orch, states } = silent();
+    orch.init(true);
+    try {
+      await orch.runRound(true);
+      const failed = states.find((s) => s.phase === 'failed');
+      expect(failed).toBeTruthy();
+      expect(failed.reason).toBe('timeout');
+    } finally {
+      orch.destroy();
+    }
+  });
+
+  test('destroy mid-round resolves the round, and re-init runs a fresh one', async () => {
+    const p = pair();
+    try {
+      const inFlight = p.alice.runRound(true);
+      p.alice.destroy();
+      await inFlight; // must settle — a destroyed round may not hang forever
+
+      // Fresh session over the same transport: both sides re-init (closing
+      // bob's wedged round) and a full round completes end to end.
+      p.alice.init(true);
+      p.bob.init(false);
+      await p.round();
+      expect(p.states.alice.filter((s) => s.phase === 'complete')).toHaveLength(1);
+      expect(p.installed.bob.at(-1).key).toHaveLength(16);
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('the initiator ignores an injected round-start', async () => {
+    const p = pair();
+    try {
+      p.alice.handleMessage(JSON.stringify({ ch: 'control', payload: { type: 'round-start' } }));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(p.states.alice).toHaveLength(0);
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('a round-start during a round is deferred, not discarded', async () => {
+    globalThis.QVC_ROUND_DEADLINE_MS = 100;
+    const { orch, states } = silent();
+    orch.init(false);
+    try {
+      orch.runRound(false); // wedged round: nothing ever arrives
+      orch.handleMessage(JSON.stringify({ ch: 'control', payload: { type: 'round-start' } }));
+      await vi.waitFor(() => {
+        // Wedged round times out, then the remembered announcement runs.
+        expect(states.filter((s) => s.phase === 'failed')).not.toHaveLength(0);
+        expect(states.filter((s) => s.phase === 'running').length).toBeGreaterThanOrEqual(2);
+      });
+    } finally {
+      orch.destroy();
+    }
+  });
+
+  test('junk injected before a round is flushed by the round-start announcement', async () => {
+    const p = pair();
+    try {
+      p.bob.handleMessage(JSON.stringify({ ch: 'classical', payload: { type: 'junk' } }));
+      await p.round();
+      expect(p.installed.alice).toHaveLength(1);
+      expect(Array.from(p.installed.alice[0].key)).toEqual(Array.from(p.installed.bob[0].key));
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('junk injected mid-round costs that round and the next one recovers', async () => {
+    globalThis.QVC_ROUND_DEADLINE_MS = 500;
+    // Slow bob's pipeline down so the injection lands before his classical reads.
+    const p = pair({ bobStepDelayMs: 30 });
+    try {
+      const r1 = p.alice.runRound(true);
+      await vi.waitFor(() => {
+        expect(p.states.bob.some((s) => s.phase === 'running')).toBe(true);
+      });
+      p.bob.handleMessage(JSON.stringify({ ch: 'classical', payload: { type: 'junk' } }));
+      await r1; // desynced: bob aborts on the junk, alice times out — no hang
+      expect(p.installed.alice).toHaveLength(0);
+
+      await p.round(); // the next round-start flushes the stale queues
+      expect(p.installed.alice).toHaveLength(1);
+      expect(Array.from(p.installed.alice[0].key)).toEqual(Array.from(p.installed.bob[0].key));
     } finally {
       p.destroy();
     }
