@@ -10,79 +10,13 @@
  */
 import { BB84Orchestrator } from '../../../website/client/static/js/bb84/orchestrator.js';
 import { WebRTCManager } from '../../../website/client/static/js/webrtc.js';
+import { orchestratorPair, USED_METHODS } from './harness.js';
 
-/** Every method the orchestrator is allowed to call on its WebRTCManager. */
-const USED_METHODS = ['sendData', 'setEncryptionKey'];
-
-/**
- * Two orchestrators wired to each other, each behind a fake WebRTCManager that
- * throws on any method access outside {@link USED_METHODS}.
- */
-function pair({ bobStepDelayMs = 0 } = {}) {
-  const installed = { alice: [], bob: [] };
-  const states = { alice: [], bob: [] };
-  const peers = {};
-
-  const transport = (self, other) =>
-    new Proxy(
-      {
-        // A real DataChannel delivers asynchronously; mirror that so the two
-        // protocol runs interleave the way they do in the browser.
-        sendData: (data) => {
-          Promise.resolve().then(() => peers[other] && peers[other].handleMessage(data));
-        },
-        setEncryptionKey: (key, keyIndex) => installed[self].push({ key, keyIndex }),
-      },
-      {
-        get(target, prop) {
-          if (typeof prop === 'string' && !(prop in target)) {
-            throw new Error(
-              `orchestrator called webrtc.${prop}(), which WebRTCManager does not define`,
-            );
-          }
-          return target[prop];
-        },
-      },
-    );
-
-  peers.alice = new BB84Orchestrator({
-    webrtcManager: transport('alice', 'bob'),
-    onStateChange: (s) => states.alice.push(s),
-  });
-  peers.bob = new BB84Orchestrator({
-    webrtcManager: transport('bob', 'alice'),
-    onStateChange: (s) => states.bob.push(s),
-    stepDelayMs: bobStepDelayMs,
-  });
-  peers.alice.init(true);
-  peers.bob.init(false);
-
-  const TERMINAL = new Set(['complete', 'failed', 'error']);
-  const settled = (side) => states[side].filter((s) => TERMINAL.has(s.phase)).length;
-
-  return {
-    alice: peers.alice,
-    bob: peers.bob,
-    installed,
-    states,
-    /**
-     * Runs one round: alice initiates, bob joins via the round-start
-     * announcement — exactly how the app drives it (the joiner never
-     * self-starts). Resolves when both sides reach a terminal phase.
-     */
-    round: async () => {
-      const target = settled('bob') + 1;
-      await peers.alice.runRound(true);
-      await vi.waitFor(() => {
-        expect(settled('bob')).toBeGreaterThanOrEqual(target);
-      });
-    },
-    // Clears the pending retry timers a failed round schedules.
-    destroy: () => {
-      peers.alice.destroy();
-      peers.bob.destroy();
-    },
-  };
+/** Convenience: a plain (unauthenticated) pair, initialized and ready. */
+async function pair(options = {}) {
+  const p = orchestratorPair(options);
+  await p.init();
+  return p;
 }
 
 afterEach(() => {
@@ -103,7 +37,7 @@ describe('BB84Orchestrator ↔ WebRTCManager contract', () => {
 
 describe('BB84Orchestrator rounds', () => {
   test('a completed round installs one matching key on both peers', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       await p.round();
 
@@ -128,7 +62,7 @@ describe('BB84Orchestrator rounds', () => {
   });
 
   test('consecutive rounds advance the key index', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       await p.round();
       await p.round();
@@ -139,7 +73,7 @@ describe('BB84Orchestrator rounds', () => {
   });
 
   test('an eavesdropper drives QBER past 11% and no key is installed', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       p.alice.setEavesdropper(true);
       expect(p.alice.eavesdropperEnabled).toBe(true);
@@ -160,7 +94,7 @@ describe('BB84Orchestrator rounds', () => {
   });
 
   test('removing the eavesdropper lets the next round succeed again', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       p.alice.setEavesdropper(true);
       await p.round();
@@ -184,7 +118,7 @@ describe('BB84Orchestrator live pipeline', () => {
   const progressSteps = (states) => states.filter((s) => s.phase === 'progress').map((s) => s.step);
 
   test('a successful round emits every phase in pipeline order', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       await p.round();
       expect(progressSteps(p.states.alice)).toEqual([
@@ -203,7 +137,7 @@ describe('BB84Orchestrator live pipeline', () => {
   });
 
   test('an eavesdropped round halts at qber with an abort phase — no correct/amplify', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       p.alice.setEavesdropper(true);
       await p.round();
@@ -222,7 +156,7 @@ describe('BB84Orchestrator live pipeline', () => {
 // qubits sat unread in Bob's queue and the round deadlocked.
 describe('BB84Orchestrator round-start announcements', () => {
   test("alice alone starting a round also runs bob's side to completion", async () => {
-    const p = pair();
+    const p = await pair();
     try {
       await p.round(); // initial round, as data-channel-open would
       await p.alice.runRound(true); // re-key initiated by alice ONLY
@@ -255,7 +189,7 @@ describe('BB84Orchestrator liveness', () => {
   test('a silent peer trips the round deadline: failed round, not a hang', async () => {
     globalThis.QVC_ROUND_DEADLINE_MS = 100;
     const { orch, states } = silent();
-    orch.init(true);
+    orch.init({ isInitiator: true });
     try {
       await orch.runRound(true);
       const failed = states.find((s) => s.phase === 'failed');
@@ -267,7 +201,7 @@ describe('BB84Orchestrator liveness', () => {
   });
 
   test('destroy mid-round resolves the round, and re-init runs a fresh one', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       const inFlight = p.alice.runRound(true);
       p.alice.destroy();
@@ -275,8 +209,7 @@ describe('BB84Orchestrator liveness', () => {
 
       // Fresh session over the same transport: both sides re-init (closing
       // bob's wedged round) and a full round completes end to end.
-      p.alice.init(true);
-      p.bob.init(false);
+      await p.init();
       await p.round();
       expect(p.states.alice.filter((s) => s.phase === 'complete')).toHaveLength(1);
       expect(p.installed.bob.at(-1).key).toHaveLength(16);
@@ -286,7 +219,7 @@ describe('BB84Orchestrator liveness', () => {
   });
 
   test('the initiator ignores an injected round-start', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       p.alice.handleMessage(JSON.stringify({ ch: 'control', payload: { type: 'round-start' } }));
       await new Promise((r) => setTimeout(r, 20));
@@ -299,7 +232,7 @@ describe('BB84Orchestrator liveness', () => {
   test('a round-start during a round is deferred, not discarded', async () => {
     globalThis.QVC_ROUND_DEADLINE_MS = 100;
     const { orch, states } = silent();
-    orch.init(false);
+    orch.init({ isInitiator: false });
     try {
       orch.runRound(false); // wedged round: nothing ever arrives
       orch.handleMessage(JSON.stringify({ ch: 'control', payload: { type: 'round-start' } }));
@@ -314,7 +247,7 @@ describe('BB84Orchestrator liveness', () => {
   });
 
   test('junk injected before a round is flushed by the round-start announcement', async () => {
-    const p = pair();
+    const p = await pair();
     try {
       p.bob.handleMessage(JSON.stringify({ ch: 'classical', payload: { type: 'junk' } }));
       await p.round();
@@ -328,7 +261,7 @@ describe('BB84Orchestrator liveness', () => {
   test('junk injected mid-round costs that round and the next one recovers', async () => {
     globalThis.QVC_ROUND_DEADLINE_MS = 500;
     // Slow bob's pipeline down so the injection lands before his classical reads.
-    const p = pair({ bobStepDelayMs: 30 });
+    const p = await pair({ bobStepDelayMs: 30 });
     try {
       const r1 = p.alice.runRound(true);
       await vi.waitFor(() => {

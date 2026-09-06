@@ -67,6 +67,7 @@ This is a research demonstration, not a production QKD system.
 - **Eavesdropper detection**: intercept-resend attacks raise QBER above the 11% threshold, triggering automatic key rejection and re-exchange
 - **BB84 keys drive the frame encryption**: on round completion the derived key is posted to the crypto worker (`setEncryptionKey` → `set-key`), and the AES-128-GCM Insertable Streams transforms (installed on every sender/receiver at connection setup) begin encrypting. The worker is **fail-closed**: until a key is installed it drops frames rather than passing them in the clear, and the in-call pill reports the worker's own state (amber establishing / green encrypted / red not-encrypted). Requires `RTCRtpScriptTransform` support in the browser.
 - **Hardened signaling**: capability-token rooms, fail-closed admin auth (`QVC_ADMIN_SECRET`), per-IP rate limiting (`QVC_RATE_LIMIT`, default 30/min), anchored CORS origins, and redacted dashboards/logs. See `docs/THREAT_MODEL.md` for the full attack-surface table.
+- **Authenticated classical channel**: per-direction HMAC keys derived (HKDF-SHA-256) from the invite link's capability token authenticate every BB84 classical message ({seq, payload, tag}; tamper/replay/inject → latched `auth-failure`), the DTLS fingerprints are cross-checked over the authenticated channel, and a short authentication string (4 emoji + 6 digits) is displayed under the video for on-camera verification. Two-tier guarantee: authenticated if your invite channel was; verified if you compared the SAS.
 
 ### Simulated
 
@@ -90,7 +91,7 @@ npm install
 npm test
 ```
 
-90 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, key-budget aborts, typed-message enforcement, adversarial-peer aborts, round deadlines/teardown liveness, and stale-queue recovery), DataChannel mux hardening, the WebRTC renegotiation guard, app rendering (cipher pill states, invite flow, room-token parsing), metrics collector, and signaling client.
+112 tests (Vitest, from the repo root): AES-GCM frame crypto, the BB84 protocol and orchestrator over ideal, simulated, and DataChannel transports (including Toeplitz seed agreement, seed-dependence, key-budget aborts, typed-message enforcement, adversarial-peer aborts, round deadlines/teardown liveness, and stale-queue recovery), DataChannel mux hardening, the WebRTC renegotiation guard, app rendering (cipher pill states, SAS strip gating, invite flow, room-token parsing), channel authentication (MAC/replay/tamper aborts, the pure fingerprint-bound SAS, retry-then-latch integrity semantics, per-call lifecycle resets), metrics collector, and signaling client.
 
 ## Project Structure
 

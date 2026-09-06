@@ -50,6 +50,23 @@ export class WebRTCManager {
   }
 
   /**
+   * DTLS certificate fingerprints from the negotiated SDP — the identities
+   * the channel-auth layer binds into the MAC'd transcript and the SAS.
+   * @returns {{local: string|null, remote: string|null}}
+   */
+  getDtlsFingerprints() {
+    const grab = (desc) => {
+      const match =
+        desc && desc.sdp ? desc.sdp.match(/^a=fingerprint:sha-256 ([0-9A-F:]+)/im) : null;
+      return match ? match[1].toUpperCase() : null;
+    };
+    return {
+      local: grab(this._pc && this._pc.localDescription),
+      remote: grab(this._pc && this._pc.remoteDescription),
+    };
+  }
+
+  /**
    * Create a room on the signaling server.
    */
   createRoom() {
