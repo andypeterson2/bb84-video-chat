@@ -26,3 +26,7 @@ settings.ini
 settings*.ini
 **/dev_python_config.json
 key.bin
+
+# Local bench configs (ports, seeds, tokens) stay out of version control
+bench*.local.toml
+bench/*.local.toml
