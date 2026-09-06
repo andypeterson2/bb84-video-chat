@@ -50,6 +50,14 @@ ignore = [
 ]
 "tests/conftest.py" = ["E402"]
 "signaling/main.py" = ["E402"]      # sys.path before imports
+# The bench package is a physics emulator: numeric literals (fair-coin 0.5,
+# varint 0x80) are the model, not magic constants worth naming, and its RNG
+# is for simulated physics, never secrets.
+"bench/**" = [
+    "PLR2004", # numeric literals are the physics model
+    "S311",    # random is simulated physics (photon loss, coin flips), not crypto
+]
+"tests/bench/**" = ["RUF003"]       # unicode minus in explanatory comments
 
 [lint.pydocstyle]
 convention = "google"

@@ -1,0 +1,76 @@
+# Example bench daemon configuration.  Run one daemon per bench:
+#   python -m bench --config bench-source.toml     # the source bench
+#   python -m bench --config bench-detector.toml   # the detector bench
+# On one machine for the emulator, point them at the same fiber_port.
+
+# Physics role: "source" owns the pulsed laser + attenuator + modulator;
+# "detector" owns the single-photon detectors + timetagger.
+role = "source"
+
+# Master seed, fanned per emulation stage for bit-reproducible runs.
+seed = 0
+
+[source]
+# Mean photon number per signal pulse (Poisson). 0.1 is a conservative
+# weak-coherent value; the sync string uses this same intensity (which is why
+# a fixed pulsed source + static attenuator is enough — no per-pulse intensity
+# modulation, which is what decoy states would require).
+mu = 0.1
+
+[fiber]
+length_km = 1.0
+attenuation_db_per_km = 0.2
+insertion_db = 1.0
+# Slow polarization rotation on the fiber (rad/s) — the dominant QBER dynamic
+# on a real deployed link. The detector's compensator chases it.
+pol_drift_rad_per_s = 0.02
+
+# ── Detector presets ────────────────────────────────────────────────────
+# APD teaching bench (pessimistic; the plan defaults):
+[detector]
+efficiency = 0.1
+dark_rate_cps = 25000.0
+jitter_sigma_ps = 350.0
+dead_time_ns = 50.0
+gate_fraction = 0.4
+# SNSPD (DTU-like) alternative — copy over [detector] to rehearse the good bench:
+#   efficiency = 0.83
+#   dark_rate_cps = 50.0
+#   jitter_sigma_ps = 40.0
+#   dead_time_ns = 33.0
+#   gate_fraction = 0.4
+
+[clock]
+# Frequency offset between the benches (parts-per-billion), drawn in
+# ±drift_ppb_max at startup and unknown to the detector. ~0.5 us/s at 100 MHz.
+drift_ppb_max = 5000.0
+drift_walk_ppb_per_s = 0.0
+
+[timing]
+rep_rate_hz = 100e6        # 10 ns slot period
+slots_per_frame = 100000   # 1 ms of emulated acquisition per frame
+frame_period_ms = 250.0    # 4 frames/s duty cycle (batched acquisition)
+
+[sync]
+# "qubit"  — recover the clock from a public sync string (Qubit4Sync); no
+#            extra hardware, matches a fixed pulsed source.
+# "shared-clock" — a clock side-channel rides the fiber (DTU-style FPGA
+#            service channel); recovery reduces to offset + drift tracking.
+mode = "qubit"
+sync_slots = 2048
+sync_blocks = 16
+
+[net]
+ws_host = "127.0.0.1"
+ws_port = 8781
+ws_allowed_origins = ["http://localhost", "https://localhost"]
+fiber_host = "127.0.0.1"
+fiber_port = 8791
+
+# Decoy-state intensity classes — RESERVED, not implemented. Present so a
+# future decoy extension changes emission scheduling, not the physics core.
+[intensities]
+enabled = false
+signal = 0.5
+decoy = 0.1
+vacuum = 0.0

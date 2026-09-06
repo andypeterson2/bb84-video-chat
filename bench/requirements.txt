@@ -1,0 +1,10 @@
+# Runtime dependencies for the bench daemon.
+#
+# The daemon is asyncio-based and process-isolated from the signaling server:
+# it shares no code or process, so its asyncio + websockets stack does not mix
+# with signaling's eventlet (which Flask-SocketIO requires). asyncio + the
+# maintained `websockets` library is the minimal choice for a long-lived
+# instrument-control process; eventlet's monkey-patching is exactly what such
+# a process must avoid. Everything else the daemon needs is stdlib
+# (asyncio, tomllib, struct, secrets, hashlib).
+websockets>=13,<16
