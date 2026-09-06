@@ -38,8 +38,16 @@ const state = {
   joinLink: '',
   sas: null, // {digits, emoji[]} — the fingerprint-bound short authentication string
   eavesdropper: false,
+  // Optical bench (hardware daemon) settings, persisted per-origin. When
+  // enabled the browser pairs with a local daemon and offers the optical
+  // backend in negotiation; the peer must present a complementary bench for
+  // optical mode to engage, otherwise both fall back to the simulator.
+  optical: { enabled: false, url: 'ws://127.0.0.1:8781', token: '' },
+  opticalStatus: '', // transient connect feedback shown in the settings row
   errorMessage: '',
 };
+
+const OPTICAL_STORAGE_KEY = 'qvc.optical';
 
 /** Per-frame QBER points kept for the strip chart. */
 const QBER_HISTORY_CAP = 120;
@@ -58,6 +66,7 @@ let webrtcManager = null;
 let localStream = null;
 let remoteStream = null;
 let bb84 = null;
+let benchConnection = null; // live DaemonConnection while optical mode is armed
 
 /* ── Icons ──────────────────────────────────────────────────────── */
 const ICONS = {
@@ -130,13 +139,13 @@ function connectToSignaling(url) {
       webrtcManager.on('data-channel-open', () => {
         state.bb84Active = true;
         render();
-        // The DataChannel carries the reservoir engine's frame + classical
-        // traffic. The room creator runs as the source (owns the photon
-        // bench / simulator); the joiner is the detector. The room's
-        // capability token doubles as the channel-authentication secret.
-        // init() starts continuous streaming itself — there are no rounds to
-        // kick off. A rejection here means the secure-channel bootstrap
-        // failed before any streaming; surface it loudly.
+        // The optical bench (if any) was already paired at create/join time,
+        // OFF this handshake path — a variable-latency pairing here would let
+        // the peer's early fingerprint messages arrive before init() built the
+        // mux, and they would be dropped. init() must run promptly so both
+        // sides' muxes exist before either sends. init() starts continuous
+        // streaming itself; a rejection means the secure-channel bootstrap
+        // failed before any streaming, so surface it loudly.
         bb84.init({ roomToken: state.roomId, isInitiator: state.isInitiator }).catch(() => {
           state.cipherState = 'compromised';
           showToast('Secure-channel setup failed — no key will be established.');
@@ -199,6 +208,15 @@ function handleBB84State(s) {
       break;
     case 'mode':
       state.mode = s.mode;
+      if (s.mode !== 'optical' && benchConnection) {
+        // Negotiation fell back to the simulator (the peer had no
+        // complementary bench). Drop the daemon connection we won't use.
+        benchConnection.close();
+        benchConnection = null;
+        if (state.optical.enabled) {
+          showToast('Peer has no optical bench — using the simulator on both sides.');
+        }
+      }
       break;
     case 'reservoir':
       if (typeof s.qber === 'number') {
@@ -253,6 +271,73 @@ function handleReservoirFailure(s) {
     // integrity / protocol / divergence: tampering OR an ordinary fault
     // (dropped message, version skew) — never assert MITM from one event.
     showToast('Channel integrity check failed — tampering or a connection fault. Recovering.');
+  }
+}
+
+/* ── Optical bench (hardware daemon) ────────────────────────────── */
+
+/** Load the persisted optical-mode settings (per-origin). */
+function loadOpticalSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(OPTICAL_STORAGE_KEY) || '{}');
+    state.optical = {
+      enabled: !!saved.enabled,
+      url: typeof saved.url === 'string' && saved.url ? saved.url : state.optical.url,
+      token: typeof saved.token === 'string' ? saved.token : '',
+    };
+  } catch {
+    /* corrupt or unavailable storage — keep the defaults */
+  }
+}
+
+function saveOpticalSettings() {
+  try {
+    localStorage.setItem(OPTICAL_STORAGE_KEY, JSON.stringify(state.optical));
+  } catch {
+    /* storage blocked — settings just won't persist */
+  }
+}
+
+/** Toggle the optical-bench checkbox from the lobby settings row. */
+function toggleOptical(enabled) {
+  state.optical.enabled = !!enabled;
+  saveOpticalSettings();
+  render();
+}
+
+/** Persist the daemon URL / token as the user edits them. */
+function setOpticalField(field, value) {
+  if (field === 'url' || field === 'token') {
+    state.optical[field] = value;
+    saveOpticalSettings();
+  }
+}
+
+/**
+ * If optical mode is enabled, pair with the local daemon and hand the
+ * orchestrator a bench backend so negotiation can offer optical. Any failure
+ * (no daemon, bad token, refused) is caught and left to fall back to the
+ * simulator with a visible notice — the call is never broken by it.
+ */
+async function connectOpticalBenchIfEnabled() {
+  benchConnection = null;
+  if (!state.optical.enabled || !state.optical.token) return;
+  try {
+    const { DaemonConnection, DaemonFrameSource } = await import('./js/bench/daemon-source.js');
+    const conn = new DaemonConnection({ url: state.optical.url, token: state.optical.token });
+    await conn.connect();
+    benchConnection = conn;
+    bb84.configureBench({
+      backend: 'bench',
+      role: conn.role,
+      connect: async () => {},
+      makeFrameSource: () => new DaemonFrameSource(conn),
+    });
+    state.opticalStatus = `paired (${conn.role})`;
+  } catch (err) {
+    benchConnection = null;
+    state.opticalStatus = 'unavailable';
+    showToast(`Optical bench unavailable (${err.message}) — using the simulator.`);
   }
 }
 
@@ -397,19 +482,27 @@ function toggleMute() {
   render();
 }
 
-function handleCreateRoom() {
+async function handleCreateRoom() {
   if (!webrtcManager) return;
   state.isInitiator = true; // the creator runs BB84 as Alice
-  webrtcManager.getLocalMedia().then((s) => {
-    localStream = s;
-    showLocalVideo(s);
-    webrtcManager.createRoom();
-  });
+  // Pair the optical bench now, BEFORE the peer connects — so the daemon's
+  // variable-latency handshake is nowhere near the DataChannel bootstrap,
+  // where a slow init would drop the peer's early fingerprint messages.
+  await connectOpticalBenchIfEnabled();
+  const s = await webrtcManager.getLocalMedia();
+  localStream = s;
+  showLocalVideo(s);
+  webrtcManager.createRoom();
 }
 
 /** Whether a key was ever installed this session (derived, not tracked). */
 function hasBeenEncrypted() {
   return state.keyIndex !== null;
+}
+
+/** Escape a string for safe interpolation into an HTML attribute value. */
+function escapeAttr(s) {
+  return String(s).replace(/[&"'<>]/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 /**
@@ -433,7 +526,7 @@ function parseRoomToken(text) {
   return token ? token[0] : '';
 }
 
-function handleJoinRoom(e) {
+async function handleJoinRoom(e) {
   e.preventDefault();
   const input = document.getElementById('room-input');
   const id = parseRoomToken(input ? input.value.trim() : '');
@@ -443,11 +536,12 @@ function handleJoinRoom(e) {
   }
   if (!webrtcManager) return;
   state.isInitiator = false; // the joiner runs BB84 as Bob
-  webrtcManager.getLocalMedia().then((s) => {
-    localStream = s;
-    showLocalVideo(s);
-    webrtcManager.joinRoom(id);
-  });
+  // Pair the optical bench before connecting (see handleCreateRoom).
+  await connectOpticalBenchIfEnabled();
+  const s = await webrtcManager.getLocalMedia();
+  localStream = s;
+  showLocalVideo(s);
+  webrtcManager.joinRoom(id);
 }
 
 /** The user compared the SAS on camera and it differs — treat as MITM. */
@@ -467,6 +561,11 @@ function copyJoinLink() {
 /** Clear per-session state — also stops BB84 retries and the encryption indicator. */
 function resetSession() {
   if (bb84) bb84.destroy();
+  if (benchConnection) {
+    benchConnection.close();
+    benchConnection = null;
+  }
+  state.mode = null;
   state.peerConnected = false;
   state.roomId = '';
   state.waitingForPeer = false;
@@ -587,6 +686,21 @@ function render() {
             <input id="room-input" type="text" placeholder="Paste invite link" autocomplete="off" ${!state.signalingConnected ? 'disabled' : ''}>
             <button type="submit" class="btn" ${!state.signalingConnected ? 'disabled' : ''}>Join</button>
           </form>
+          <div class="optical">
+            <label class="optical-toggle">
+              <input type="checkbox" ${state.optical.enabled ? 'checked' : ''} onchange="toggleOptical(this.checked)">
+              <span>Use optical bench (hardware daemon)</span>
+            </label>
+            ${
+              state.optical.enabled
+                ? `<div class="optical-fields">
+              <input id="optical-url" class="optical-input" type="text" placeholder="ws://127.0.0.1:8781" value="${escapeAttr(state.optical.url)}" oninput="setOpticalField('url', this.value)">
+              <input id="optical-token" class="optical-input" type="password" placeholder="Pairing token (from daemon)" oninput="setOpticalField('token', this.value)">
+              <span class="optical-hint">Both peers need a bench for optical mode; otherwise the call uses the simulator.</span>
+            </div>`
+                : ''
+            }
+          </div>
         </div>
         <div class="media-controls">
           <button class="media-btn ${state.cameraOn ? '' : 'media-btn--off'}" onclick="toggleCamera()">${state.cameraOn ? ICONS.cameraOn : ICONS.cameraOff}</button>
@@ -607,6 +721,10 @@ function render() {
         pendingRoomToken = '';
       }
     }
+    // The pairing token is a credential: restore it through the value sink so
+    // it never lives in the rendered HTML string.
+    const tokenInput = document.getElementById('optical-token');
+    if (tokenInput) tokenInput.value = state.optical.token;
     if (localStream) {
       const v = document.getElementById('local-video');
       if (v) {
@@ -688,6 +806,7 @@ function render() {
 /* ── Init ───────────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
   setTheme(getTheme());
+  loadOpticalSettings();
   pendingRoomToken = parseRoomToken(window.location.hash);
   connectToSignaling(window.QVC_SIGNALING_URL || window.location.origin);
   render();
@@ -701,3 +820,5 @@ window.toggleMute = toggleMute;
 window.toggleEavesdropper = toggleEavesdropper;
 window.copyJoinLink = copyJoinLink;
 window.handleSasMismatch = handleSasMismatch;
+window.toggleOptical = toggleOptical;
+window.setOpticalField = setOpticalField;

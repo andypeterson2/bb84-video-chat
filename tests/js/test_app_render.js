@@ -187,6 +187,33 @@ describe('cipher pill', () => {
   });
 });
 
+describe('optical bench settings', () => {
+  test('the toggle is off by default and shows no fields', () => {
+    app.render();
+    const toggle = document.querySelector('.optical-toggle input');
+    expect(toggle).not.toBeNull();
+    expect(toggle.checked).toBe(false);
+    expect(document.querySelector('.optical-fields')).toBeNull();
+  });
+
+  test('enabling reveals the url and token fields', () => {
+    app.state.optical = { enabled: true, url: 'ws://127.0.0.1:8781', token: '' };
+    app.render();
+    expect(document.querySelector('.optical-fields')).not.toBeNull();
+    expect(document.getElementById('optical-url').value).toBe('ws://127.0.0.1:8781');
+    expect(document.getElementById('optical-token')).not.toBeNull();
+  });
+
+  test('the token is restored via the value sink, not the HTML string', () => {
+    app.state.optical = { enabled: true, url: 'ws://x', token: 'secret-token' };
+    app.render();
+    // The secret must not appear in the rendered markup...
+    expect(document.getElementById('app').innerHTML).not.toContain('secret-token');
+    // ...but is present in the field's live value.
+    expect(document.getElementById('optical-token').value).toBe('secret-token');
+  });
+});
+
 describe('parseRoomToken', () => {
   test('extracts the token from a full invite link', () => {
     expect(app.parseRoomToken('https://example.test/chat#room=abcDEF123456789_-x')).toBe(

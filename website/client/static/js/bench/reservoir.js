@@ -213,7 +213,12 @@ export class ReservoirEngine {
   start() {
     if (this._destroyed) return;
     this._listenForSessionRestarts();
-    if (!this._isSource) this._listenForPeerDetections();
+    // Only the loopback detector receives detections over the mux (the source
+    // peer computes and ships them). A daemon-backed detector gets its
+    // detections from its own daemon, so it exposes no `deliverDetections`.
+    if (!this._isSource && typeof this._source.deliverDetections === 'function') {
+      this._listenForPeerDetections();
+    }
     this._startSession(0);
   }
 
