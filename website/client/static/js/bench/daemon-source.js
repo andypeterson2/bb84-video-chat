@@ -105,9 +105,11 @@ export class DaemonConnection {
         }
         break;
       }
-      case 'detections':
-        this._onDetections?.(decodeDaemonDetections(msg));
+      case 'detections': {
+        const decoded = decodeDaemonDetections(msg);
+        if (decoded) this._onDetections?.(decoded);
         break;
+      }
       case 'status':
         this._onStatus?.(msg);
         break;
@@ -168,17 +170,35 @@ export class DaemonConnection {
   }
 }
 
-/** Decode a daemon `detections` message into the engine's detection shape. */
+/**
+ * Decode a daemon `detections` message into the engine's detection shape;
+ * null on malformed input.
+ *
+ * Mirrors reservoir.js `decodePeerDetections`' hardening. The daemon is a
+ * local, token-paired component, but a buggy daemon (or a hostile configured
+ * `ws://` endpoint) must not throw out of the ws.onmessage dispatch — the
+ * caller only wraps JSON.parse. Count is derived from the index set: unlike
+ * the peer message, a daemon `detections` carries no explicit count field.
+ */
 export function decodeDaemonDetections(msg) {
-  const indices = decodeIndices(fromB64(msg.indices));
-  const count = indices.length;
-  return {
-    frameId: msg.frame_id,
-    indices,
-    bits: unpackBits(fromB64(msg.bits), count),
-    bases: unpackBits(fromB64(msg.bases), count),
-    stats: msg.stats ?? {},
-  };
+  if (!msg || typeof msg !== 'object' || !Number.isInteger(msg.frame_id)) return null;
+  const idx = fromB64(msg.indices);
+  const bits = fromB64(msg.bits);
+  const bases = fromB64(msg.bases);
+  if (!idx || !bits || !bases) return null;
+  try {
+    const indices = decodeIndices(idx);
+    const count = indices.length;
+    return {
+      frameId: msg.frame_id,
+      indices,
+      bits: unpackBits(bits, count),
+      bases: unpackBits(bases, count),
+      stats: msg.stats ?? {},
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

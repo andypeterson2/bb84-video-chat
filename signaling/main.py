@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
+# Eventlet must monkey-patch the stdlib before anything imports socket / ssl /
+# threading (Flask, python-socketio and our server module all do). Doing it as
+# the first thing in the process entry point is what lets the Socket.IO server
+# run on eventlet greenlets; without it, a "threading"-mode Socket.IO under the
+# eventlet WSGI server below spawns real OS threads that race the greenlets over
+# the shared room state.
+import eventlet
+
+eventlet.monkey_patch()
+
 import logging
 import os
 import signal
 import socket as _socket
 import sys
+
+# This process serves via eventlet.wsgi, so the Socket.IO server it builds must
+# use the matching eventlet async mode. Default it here (still overridable)
+# before create_app() reads SIO_ASYNC_MODE.
+os.environ.setdefault("SIO_ASYNC_MODE", "eventlet")
 
 from signaling.server import create_app
 
@@ -42,7 +57,6 @@ def main() -> None:
 
     logger.info("Signaling server starting on %s:%d", host, port)
 
-    import eventlet  # noqa: PLC0415
     import eventlet.wsgi  # noqa: PLC0415
 
     eventlet.wsgi.server(

@@ -150,11 +150,18 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     flask_app = Flask(__name__)
     CORS(flask_app, origins=_CORS_LIST)
 
-    # Use eventlet in production (Docker), threading for tests/local dev
+    # Use eventlet in production (Docker), threading for tests/local dev.
+    # main.py forces eventlet for the real server (and monkey-patches the
+    # stdlib) so the async model matches the WSGI server it runs under.
     _async_mode = os.environ.get("SIO_ASYNC_MODE", "threading")
+    # Cap inbound frames so an oversize payload can't exhaust memory. Signaling
+    # messages are small (an SDP offer is the largest, a few KB); 64 KiB is
+    # generous headroom. Overridable for unusual SDP.
+    _max_buffer = int(os.environ.get("QVC_MAX_HTTP_BUFFER", str(64 * 1024)))
     sio = socketio.Server(
         cors_allowed_origins=_check_origin,
         async_mode=_async_mode,
+        max_http_buffer_size=_max_buffer,
         logger=False,
         engineio_logger=False,
     )
@@ -337,6 +344,8 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     @sio.event
     def offer(sid, data):
         """Relay SDP offer to the other peer in the room."""
+        if not isinstance(data, dict):
+            return
         room = rooms.get_peer_room(sid)
         if room is None:
             return
@@ -347,6 +356,8 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     @sio.event
     def answer(sid, data):
         """Relay SDP answer to the other peer in the room."""
+        if not isinstance(data, dict):
+            return
         room = rooms.get_peer_room(sid)
         if room is None:
             return
@@ -357,6 +368,8 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     @sio.event
     def ice_candidate(sid, data):
         """Relay ICE candidate to the other peer in the room."""
+        if not isinstance(data, dict):
+            return
         room = rooms.get_peer_room(sid)
         if room is None:
             return
