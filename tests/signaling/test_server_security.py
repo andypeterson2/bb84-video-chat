@@ -164,6 +164,38 @@ class TestCORSAnchoring:
         )
         assert resp.headers.get("Access-Control-Allow-Origin") == "http://localhost:3000"
 
+    def test_check_origin_tolerates_the_engineio_call_shapes(self):
+        # engineio may invoke the callback as (origin, environ) or (origin),
+        # and passes origin=None when the request carries no Origin header —
+        # matching a regex against None would raise, so it must be handled.
+        assert _check_origin("http://localhost:3000", {"HTTP_ORIGIN": "x"})  # 2-arg
+        assert _check_origin("http://localhost:3000")  # 1-arg
+        assert not _check_origin(None)  # no Origin header
+        assert not _check_origin("")
+        assert not _check_origin("http://evil.com")
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            {},  # no Origin header — the case that actually 500'd
+            {"Origin": "http://localhost:3000"},  # allowed cross-origin
+            {"Origin": "http://evil.com"},  # rejected cross-origin
+        ],
+    )
+    def test_socketio_handshake_never_500s_on_the_origin_check(self, headers):
+        """The Socket.IO handshake's CORS callback must never crash the server.
+
+        Driving the Socket.IO WSGI app (not the Flask routes) exercises
+        engineio's origin check; whatever the Origin header, the response is a
+        normal engineio status — never a 500 from the callback raising.
+        """
+        from werkzeug.test import Client
+
+        flask_app, _, _ = create_app()
+        client = Client(flask_app.sio_wsgi_app)
+        resp = client.get("/socket.io/?EIO=4&transport=polling", headers=headers)
+        assert resp.status_code != 500
+
 
 class TestRateLimiter:
     """Token-bucket unit behavior."""
