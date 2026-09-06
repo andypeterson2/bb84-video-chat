@@ -177,7 +177,7 @@ export class ChannelAuth {
 /**
  * Wraps a classical channel in the {v, seq, payload, tag} envelope.
  *
- * Lives at the adapter layer so protocol.js stays protocol-only. Sequence
+ * Lives at the adapter layer, below the frame/sift/distill logic. Sequence
  * numbers are per-direction and monotonic from 0; the receive side accepts
  * exactly the next expected sequence, so replayed, reordered, or dropped
  * messages surface as a ChannelAuthError rather than being absorbed.
