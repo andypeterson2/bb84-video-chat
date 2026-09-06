@@ -210,3 +210,6 @@ def _validate(cfg: BenchConfig) -> None:
     if cfg.detector.gate_fraction <= 0 or cfg.detector.gate_fraction > 0.5:
         msg = "detector.gate_fraction must be in (0, 0.5]"
         raise ValueError(msg)
+    if any(not o for o in cfg.net.ws_allowed_origins):
+        msg = "net.ws_allowed_origins must not contain empty entries"
+        raise ValueError(msg)

@@ -53,6 +53,9 @@ class BenchConnection:
         self._source = source
         self._detector = detector
         self._started = False
+        # Paired state is per-connection, never shared: a second connection
+        # must present the token itself, and cannot ride on this one's pairing.
+        self._paired = False
 
     async def on_message(self, raw: str | bytes) -> None:
         """Handle one browser message (JSON text)."""
@@ -66,13 +69,14 @@ class BenchConnection:
             return
 
         kind = msg["t"]
-        if not self._pairing.is_paired:
+        if not self._paired:
             if kind != "pair":
                 await self._send(wp.refused("must pair first"))
                 return
             if not self._pairing.verify(msg.get("token", "")):
                 await self._send(wp.refused("bad token"))
                 return
+            self._paired = True
             await self._send(wp.paired(self._cfg))
             return
 
@@ -123,10 +127,17 @@ class BenchConnection:
 
 
 def origin_allowed(origin: str | None, allowed: tuple[str, ...]) -> bool:
-    """Whether a browser Origin header is on the daemon's allowlist."""
-    if origin is None:
+    """Whether a browser Origin header is on the daemon's allowlist.
+
+    An Origin is ``scheme://host[:port]`` with no path, so a match is either the
+    exact allowlisted value or that value followed by an explicit ``:port``. The
+    port form is gated on the ``:`` boundary: a bare ``startswith`` prefix test
+    would also accept ``http://localhost.evil.com`` against an allowlisted
+    ``http://localhost``.
+    """
+    if not origin:
         return False
-    return any(origin == a or origin.startswith((a + ":", a)) for a in allowed)
+    return any(origin == a or origin.startswith(a + ":") for a in allowed)
 
 
 async def serve(cfg: BenchConfig, *, pairing: Pairing | None = None) -> None:  # pragma: no cover - real entry point
@@ -171,7 +182,9 @@ async def serve(cfg: BenchConfig, *, pairing: Pairing | None = None) -> None:  #
         if not origin_allowed(origin, cfg.net.ws_allowed_origins):
             await ws.close(code=1008, reason="origin not allowed")
             return
-        pairing.reset()
+        # A fresh per-connection BenchConnection carries its own paired flag;
+        # the shared Pairing only holds the token, so nothing here can leak one
+        # connection's paired state to another or reset another's pairing.
         conn = BenchConnection(cfg, pairing, lambda m: ws.send(json.dumps(m)), source=source, detector=detector)
         current["conn"] = conn
         try:
@@ -179,7 +192,6 @@ async def serve(cfg: BenchConfig, *, pairing: Pairing | None = None) -> None:  #
                 await conn.on_message(raw)
         finally:
             current["conn"] = None
-            pairing.reset()
 
     async with websockets.serve(ws_handler, cfg.net.ws_host, cfg.net.ws_port):
         logger.warning("Bench daemon (%s) listening on ws://%s:%d", cfg.role, cfg.net.ws_host, cfg.net.ws_port)

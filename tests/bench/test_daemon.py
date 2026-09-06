@@ -40,10 +40,21 @@ class Sink:
 
 def test_origin_allowlist():
     allowed = ("http://localhost", "https://andypeterson.dev")
-    assert origin_allowed("http://localhost:8077", allowed)
+    assert origin_allowed("http://localhost", allowed)
+    assert origin_allowed("http://localhost:8077", allowed)  # explicit port ok
     assert origin_allowed("https://andypeterson.dev", allowed)
     assert not origin_allowed("http://evil.test", allowed)
     assert not origin_allowed(None, allowed)
+
+
+def test_origin_allowlist_rejects_prefix_lookalikes():
+    # A bare startswith test would accept these against the allowlist entries.
+    allowed = ("http://localhost", "https://andypeterson.dev")
+    assert not origin_allowed("http://localhost.evil.com", allowed)
+    assert not origin_allowed("http://localhostevil.com", allowed)
+    assert not origin_allowed("https://andypeterson.dev.evil.com", allowed)
+    assert not origin_allowed("", allowed)
+    assert not origin_allowed("http://localhost", ("",))  # empty entry never matches
 
 
 def test_must_pair_before_anything():
@@ -67,6 +78,40 @@ def test_bad_token_refused_good_token_paired():
         await conn.on_message(json.dumps({"t": "pair", "token": "secret-token"}))
         assert sink.last("paired") is not None
         assert sink.last("paired")["role"] == "source"
+
+    asyncio.run(run())
+
+
+def test_second_connection_does_not_inherit_pairing():
+    """Two connections share one Pairing (the single printed token) but not
+    paired state. A second, unpaired connection must present the token itself —
+    it cannot ride on the first's pairing — and the first stays paired
+    regardless of what the second does. The old shared-`_paired` bool failed
+    both halves: B saw is_paired True after A paired, and B's connect/close
+    reset A. The transport-free tests missed it by using a fresh Pairing per
+    connection; here both share one, as the live daemon wires them.
+    """
+
+    async def run():
+        pairing = Pairing("shared-token")
+        a_sink, b_sink = Sink(), Sink()
+        conn_a = BenchConnection(_cfg("source"), pairing, a_sink, source=SourceBench(_cfg("source"), _noop))
+        conn_b = BenchConnection(_cfg("source"), pairing, b_sink, source=SourceBench(_cfg("source"), _noop))
+
+        # A pairs with the shared token.
+        await conn_a.on_message(json.dumps({"t": "pair", "token": "shared-token"}))
+        assert a_sink.last("paired") is not None
+
+        # B, without pairing, is refused a control even though A is paired —
+        # no auth bypass from the shared object.
+        await conn_b.on_message(json.dumps({"t": "eve", "enabled": True}))
+        assert b_sink.last("refused") is not None
+        assert b_sink.last("paired") is None
+
+        # A is still paired after B's activity — no shared reset / pairing DoS.
+        a_sink.msgs.clear()
+        await conn_a.on_message(json.dumps({"t": "eve", "enabled": True}))
+        assert a_sink.last("refused") is None
 
     asyncio.run(run())
 
