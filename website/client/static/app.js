@@ -29,6 +29,7 @@ const state = {
   // never assumed from the UI's own bookkeeping.
   cipherState: 'establishing',
   joinLink: '',
+  sas: null, // {digits, emoji[]} — frozen after the first authenticated round
   eavesdropper: false,
   pipeline: [], // live BB84 step progress for the current round (see freshPipeline)
   errorMessage: '',
@@ -61,6 +62,7 @@ let socket = null;
 let webrtcManager = null;
 let metricsCollector = null;
 let localStream = null;
+let remoteStream = null;
 let bb84 = null;
 
 /* ── Icons ──────────────────────────────────────────────────────── */
@@ -140,9 +142,20 @@ function connectToSignaling(url) {
         // The DataChannel carries BB84's quantum + classical messages. The room
         // creator runs the protocol as Alice; the joiner runs as Bob whenever
         // the creator announces a round (it never self-starts, so an injected
-        // round-start can't wedge it into a phantom round).
-        bb84.init(state.isInitiator);
-        if (state.isInitiator) bb84.runRound(true);
+        // round-start can't wedge it into a phantom round). The room's
+        // capability token doubles as the channel-authentication secret.
+        bb84
+          .init({ roomToken: state.roomId, isInitiator: state.isInitiator })
+          .then(() => {
+            if (state.isInitiator) bb84.runRound(true);
+          })
+          .catch(() => {
+            // Auth bootstrap failed (fingerprints/HKDF): no round may run.
+            // Loud red state, never a silent fall-through to "establishing".
+            state.cipherState = 'compromised';
+            showToast('Secure-channel setup failed — no key will be established.');
+            render();
+          });
       });
       webrtcManager.on('data-channel-message', (d) => bb84.handleMessage(d));
       webrtcManager.on('peer-disconnected', () => {
@@ -215,16 +228,25 @@ function handleBB84State(s) {
     state.qberHistory.push(s.qber);
     state.keyBudget = (s.metrics && s.metrics.keyLength) || 0;
     state.keyIndex = s.keyIndex;
+    if (s.sas) state.sas = s.sas;
     state.pipeline.forEach((st) => {
       if (st.status !== 'failed') st.status = 'done';
     });
   } else if (s.phase === 'failed') {
-    if (typeof s.qber === 'number') {
-      state.qber = s.qber;
-      state.qberHistory.push(s.qber);
+    if (s.reason === 'integrity') {
+      // A MAC/sequence/fingerprint check failed. That is tampering OR an
+      // ordinary fault (dropped message, version skew) — never assert MITM
+      // as fact on one event. The orchestrator retries; persistent failure
+      // arrives below as 'exhausted' and goes red there.
+      showToast('Channel integrity check failed — tampering or a connection fault. Retrying.');
+    } else {
+      if (typeof s.qber === 'number') {
+        state.qber = s.qber;
+        state.qberHistory.push(s.qber);
+      }
+      setStep('qber', 'failed');
+      showToast('QBER above the 11% threshold — key rejected, re-keying.');
     }
-    setStep('qber', 'failed');
-    showToast('QBER above the 11% threshold — key rejected, re-keying.');
   } else if (s.phase === 'error') {
     showToast('Key exchange error — retrying.');
   } else if (s.phase === 'exhausted') {
@@ -232,7 +254,7 @@ function handleBB84State(s) {
     // downgrades), but no fresh key is obtainable on this channel — show it
     // red and leave the decision to the user.
     state.cipherState = 'compromised';
-    showToast('Re-keying failed repeatedly — the channel may be compromised. Leave and retry.');
+    showToast('Channel integrity lost — tampering or a persistent fault. Leave and retry.');
   }
   render();
 }
@@ -380,6 +402,11 @@ function showLocalVideo(s) {
   }
 }
 function showRemoteVideo(s) {
+  // Keep the stream in module state: render() rebuilds the in-call DOM with
+  // innerHTML, so the <video> this attaches to is replaced on every state
+  // change — without the re-attachment in render(), the remote video went
+  // black on the first re-render after the stream arrived.
+  remoteStream = s;
   const v = document.getElementById('remote-video');
   if (v) {
     v.srcObject = s;
@@ -387,6 +414,7 @@ function showRemoteVideo(s) {
   }
 }
 function clearRemoteVideo() {
+  remoteStream = null;
   const v = document.getElementById('remote-video');
   if (v) v.srcObject = null;
 }
@@ -462,6 +490,12 @@ function handleJoinRoom(e) {
   });
 }
 
+/** The user compared the SAS on camera and it differs — treat as MITM. */
+function handleSasMismatch() {
+  showToast('SAS mismatch reported — tearing down the call. Do not trust this channel.');
+  handleLeave();
+}
+
 function copyJoinLink() {
   if (!state.joinLink) return;
   navigator.clipboard
@@ -483,6 +517,7 @@ function resetSession() {
   state.keyIndex = null;
   state.cipherState = 'establishing';
   state.joinLink = '';
+  state.sas = null;
   state.eavesdropper = false;
   state.pipeline = [];
   stopTimer();
@@ -535,6 +570,11 @@ function setTheme(t) {
   document.documentElement.dataset.theme = t;
 }
 
+/** Red pill states — no security promise may render beside these. */
+function pillIsRed() {
+  return ['unencrypted', 'compromised', 'unsupported'].includes(state.cipherState);
+}
+
 /** Always-visible cipher pill — worker truth, not UI assumption. */
 function cipherPill() {
   const views = {
@@ -544,7 +584,7 @@ function cipherPill() {
       label: `Encrypted · AES-GCM${state.keyIndex !== null ? ` #${state.keyIndex}` : ''}`,
     },
     unencrypted: { mod: 'unencrypted', label: 'NOT ENCRYPTED — media blocked' },
-    compromised: { mod: 'unencrypted', label: 'RE-KEY FAILED — channel suspect' },
+    compromised: { mod: 'unencrypted', label: 'CHANNEL INTEGRITY LOST' },
     unsupported: { mod: 'unencrypted', label: 'ENCRYPTION UNSUPPORTED (browser)' },
   };
   const v = views[state.cipherState] || views.establishing;
@@ -617,6 +657,16 @@ function render() {
           <video id="local-video" class="pip-video" autoplay muted playsinline></video>
         </div>
         <div class="call-info"><span>Room <strong id="room-ref"></strong></span>${cipherPill()}<span id="timer">${fmtTime(state.elapsed)}</span></div>
+        ${
+          state.sas && !pillIsRed()
+            ? `<div class="sas">
+          <span class="sas-emoji">${state.sas.emoji.join(' ')}</span>
+          <strong class="sas-digits" id="sas-digits"></strong>
+          <span class="sas-hint">Compare with your partner on camera — same emoji, same digits.</span>
+          <button class="sas-mismatch" onclick="handleSasMismatch()">Doesn't match</button>
+        </div>`
+            : ''
+        }
         <div id="quantum-panel" class="quantum-panel">
           ${
             state.bb84Active
@@ -657,6 +707,15 @@ function render() {
       <div id="toast" class="toast"></div>`;
     const roomRef = document.getElementById('room-ref');
     if (roomRef) roomRef.textContent = state.roomId ? `${state.roomId.slice(0, 4)}\u2026` : '';
+    const sasDigits = document.getElementById('sas-digits');
+    if (sasDigits && state.sas) sasDigits.textContent = state.sas.digits;
+    if (remoteStream) {
+      const rv = document.getElementById('remote-video');
+      if (rv) {
+        rv.srcObject = remoteStream;
+        rv.play().catch(() => {});
+      }
+    }
     if (localStream) {
       const v = document.getElementById('local-video');
       if (v) {
@@ -683,3 +742,4 @@ window.toggleCamera = toggleCamera;
 window.toggleMute = toggleMute;
 window.toggleEavesdropper = toggleEavesdropper;
 window.copyJoinLink = copyJoinLink;
+window.handleSasMismatch = handleSasMismatch;

@@ -125,16 +125,37 @@ describe('cipher pill', () => {
     expect(el.textContent).toContain('NOT ENCRYPTED');
   });
 
-  test('compromised state is red and names the re-key failure', () => {
+  test('compromised state is red and names the integrity loss', () => {
     const el = pill('compromised');
     expect(el.className).toContain('cipher-pill--unencrypted');
-    expect(el.textContent).toContain('RE-KEY FAILED');
+    expect(el.textContent).toContain('INTEGRITY LOST');
   });
 
   test('unsupported browser state is red and blames the browser', () => {
     const el = pill('unsupported');
     expect(el.className).toContain('cipher-pill--unencrypted');
     expect(el.textContent).toContain('UNSUPPORTED');
+  });
+
+  test('the SAS strip renders while the pill is not red', () => {
+    app.state.peerConnected = true;
+    app.state.cipherState = 'encrypted';
+    app.state.sas = { digits: '123456', emoji: ['🐙', '🦊', '🐢', '🦉'] };
+    app.render();
+    expect(document.querySelector('.sas')).not.toBeNull();
+    expect(document.getElementById('sas-digits').textContent).toBe('123456');
+  });
+
+  test('the SAS strip is hidden while the pill is red', () => {
+    // A red pill means the channel's security claims failed — rendering a
+    // "compare and trust" prompt beside it would contradict the pill.
+    app.state.peerConnected = true;
+    app.state.sas = { digits: '123456', emoji: ['🐙', '🦊', '🐢', '🦉'] };
+    for (const red of ['unencrypted', 'compromised', 'unsupported']) {
+      app.state.cipherState = red;
+      app.render();
+      expect(document.querySelector('.sas')).toBeNull();
+    }
   });
 
   test('the quantum panel has no separate AES-GCM tile (the pill owns it)', () => {
