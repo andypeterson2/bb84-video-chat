@@ -97,8 +97,21 @@ def _parse_cors(raw: str) -> tuple[list[str], list[re.Pattern], set[str]]:
 _CORS_LIST, _CORS_REGEXES, _EXTRA_ORIGINS = _parse_cors(_CORS_RAW)
 
 
-def _check_origin(origin: str) -> bool:
-    """Origin check for Socket.IO (which needs a callable, not patterns)."""
+def _check_origin(origin: str | None = None, environ: dict | None = None) -> bool:
+    """Origin check for Socket.IO (which needs a callable, not patterns).
+
+    Two robustness points, both of which engineio can otherwise turn into an
+    opaque 500 on the handshake:
+      - Arity: engineio invokes this as ``(origin, environ)`` on newer
+        versions and ``(origin)`` on older ones; the optional second argument
+        accepts both.
+      - No Origin header: a same-origin or non-browser request has
+        ``origin=None``, and matching a regex against ``None`` would raise. A
+        request with no cross-origin to vet is simply not allow-listed.
+    """
+    del environ  # the allowlist decision is origin-only
+    if not origin:
+        return False
     return origin in _EXTRA_ORIGINS or any(rx.match(origin) for rx in _CORS_REGEXES)
 
 
