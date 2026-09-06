@@ -164,6 +164,12 @@ export class ChannelAuth {
    * @returns {Promise<{digits: string, emoji: string[]}>}
    */
   async sas(fpInitiator, fpJoiner) {
+    // SAS strength is ~40 bits: 6 decimal digits from a 32-bit word (~20 bits)
+    // plus 4 emoji at 5 bits each (SAS_EMOJI has exactly 32 entries, so b % 32
+    // is unbiased). This is adequate only because the orchestrator's
+    // commit-then-reveal fingerprint exchange reduces an active MITM to a
+    // single blind guess at the displayed SAS — the ZRTP property (RFC 6189).
+    // If that commitment step is ever removed, widen the SAS before shipping.
     const material = [`${CONTEXT_SALT}-sas`, fpInitiator, fpJoiner].join('\n');
     const d = new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode(material)));
     const digits = String(((d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3]) >>> 0)

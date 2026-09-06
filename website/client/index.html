@@ -4,6 +4,17 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="QKD Video Chat — quantum-secure peer-to-peer video calling.">
+    <!-- Content-Security-Policy: a deliberately staged, permissive policy.
+         No XSS sink exists (peer/user values reach the DOM only via
+         textContent / escapeAttr), but this bounds the blast radius of any
+         future one and blocks cleartext exfil / plugin / object vectors.
+         script-src keeps 'unsafe-inline' for now because render() uses inline
+         on* handlers; the addEventListener refactor that lets us drop it is
+         tracked as a follow-up. style-src/font-src admit Google Fonts (the UI
+         face); connect-src admits https/wss (the signaling origin is
+         operator-configured) plus the loopback daemon. frame-ancestors is
+         omitted here (ignored in <meta>); set it as an HTTP header at deploy. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https: wss: ws://localhost:* ws://127.0.0.1:*; base-uri 'self'; object-src 'none'">
     <title>QKD Video Chat</title>
     <!-- ?v= cache-busters roll the CSS/JS pair over together on deploy; a
          stale cached app.js driving a fresh crypto worker (or vice versa) is
@@ -14,8 +25,11 @@
     <div id="app" class="main-screen"></div>
     <!-- Vendored socket.io-client 4.7.5 (was a CDN tag — a third party in the
          E2E-crypto page's script chain). Provenance: cdn.socket.io + jsDelivr,
-         both matching sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO -->
-    <script src="static/vendor/socket.io-4.7.5.min.js"></script>
+         both matching the sha384 below. The integrity attribute enforces that
+         hash: a tampered vendor file is refused rather than executed. -->
+    <script src="static/vendor/socket.io-4.7.5.min.js"
+            integrity="sha384-2huaZvOR9iDzHqslqwpR87isEmrfxqyWOF7hr7BY6KG0+hVKLoEXMPUJw3ynWuhO"
+            crossorigin="anonymous"></script>
     <script src="static/app.js?v=3"></script>
   </body>
 </html>

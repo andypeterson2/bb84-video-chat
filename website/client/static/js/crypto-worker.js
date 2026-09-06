@@ -94,6 +94,12 @@ async function encryptFrame(frame, controller) {
   }
 
   const t0 = performance.now();
+  // Random 96-bit IV per frame. AES-GCM's random-IV birthday bound (a nonce
+  // collision becomes non-negligible near ~2^32 frames under one key) is kept
+  // far out of reach by key rotation: the reservoir mints a fresh key on a
+  // ~10s floor (ROTATION_FLOOR_MS in reservoir.js), so frames-per-key stays in
+  // the thousands. If that cadence is ever raised toward 2^32 frames/key,
+  // switch to a deterministic counter IV before doing so.
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, currentKey, frame.data);
 

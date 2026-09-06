@@ -48,6 +48,11 @@ const state = {
 };
 
 const OPTICAL_STORAGE_KEY = 'qvc.optical';
+// The daemon pairing token is a live credential: keep it in sessionStorage so
+// it dies with the tab, rather than persisting in localStorage where it would
+// sit at rest, readable by any script on the origin. Non-secret settings
+// (enabled, url) still persist across sessions in OPTICAL_STORAGE_KEY.
+const OPTICAL_TOKEN_KEY = 'qvc.optical.token';
 
 /** Per-frame QBER points kept for the strip chart. */
 const QBER_HISTORY_CAP = 120;
@@ -280,21 +285,47 @@ function handleReservoirFailure(s) {
 function loadOpticalSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(OPTICAL_STORAGE_KEY) || '{}');
+    // The token lives in sessionStorage (per-tab, non-persistent); everything
+    // else in localStorage. A migration path for tokens written by an older
+    // build: if none is in sessionStorage, fall back to (and then clear) the
+    // one that may still be in the localStorage blob.
+    let token = '';
+    try {
+      token = sessionStorage.getItem(OPTICAL_TOKEN_KEY) || '';
+    } catch {
+      /* sessionStorage unavailable — no token this session */
+    }
+    if (!token && typeof saved.token === 'string') token = saved.token;
     state.optical = {
       enabled: !!saved.enabled,
       url: typeof saved.url === 'string' && saved.url ? saved.url : state.optical.url,
-      token: typeof saved.token === 'string' ? saved.token : '',
+      token,
     };
+    if (saved.token) saveOpticalSettings(); // rewrite without the token at rest
   } catch {
     /* corrupt or unavailable storage — keep the defaults */
   }
 }
 
 function saveOpticalSettings() {
+  // Persist non-secret settings only; the token is never written to
+  // localStorage (see OPTICAL_TOKEN_KEY).
   try {
-    localStorage.setItem(OPTICAL_STORAGE_KEY, JSON.stringify(state.optical));
+    localStorage.setItem(
+      OPTICAL_STORAGE_KEY,
+      JSON.stringify({ enabled: state.optical.enabled, url: state.optical.url }),
+    );
   } catch {
     /* storage blocked — settings just won't persist */
+  }
+  try {
+    if (state.optical.token) {
+      sessionStorage.setItem(OPTICAL_TOKEN_KEY, state.optical.token);
+    } else {
+      sessionStorage.removeItem(OPTICAL_TOKEN_KEY);
+    }
+  } catch {
+    /* sessionStorage blocked — token just won't persist across reloads */
   }
 }
 
