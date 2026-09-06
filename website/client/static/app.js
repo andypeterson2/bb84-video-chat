@@ -20,34 +20,29 @@ const state = {
   elapsed: 0,
   bb84Active: false,
   qber: null,
-  qberHistory: [],
-  keyBudget: 0,
+  qberHistory: [], // per-frame QBER, most recent last (capped for the strip chart)
   keyIndex: null,
+  // Reservoir telemetry — the key currently being distilled and the pool.
+  mode: null, // 'sim' | 'optical' (backend badge; never claim photons that weren't)
+  reservoirBits: 0, // accepted sifted bits pooled toward the next key
+  mintBudget: null, // bits needed before a mint can run
+  keysMinted: 0,
+  rotations: 0,
+  poolDepth: 0, // keys waiting in the reservoir to rotate in
+  lastDetections: null,
   // Worker-reported cipher truth: 'establishing' | 'encrypted' | 'unencrypted'
   // | 'compromised' (re-key exhausted; last good key still active). Driven only
   // by cipher-state messages from the crypto worker (or BB84 giving up) —
   // never assumed from the UI's own bookkeeping.
   cipherState: 'establishing',
   joinLink: '',
-  sas: null, // {digits, emoji[]} — frozen after the first authenticated round
+  sas: null, // {digits, emoji[]} — the fingerprint-bound short authentication string
   eavesdropper: false,
-  pipeline: [], // live BB84 step progress for the current round (see freshPipeline)
   errorMessage: '',
 };
 
-// The BB84 round as an ordered pipeline, surfaced live so a viewer can watch a
-// key being distilled: photons sent → basis-sifted → error-sampled → corrected
-// → privacy-amplified into the final key.
-const PIPELINE_STEPS = [
-  { key: 'transmit', label: 'Transmit' },
-  { key: 'sift', label: 'Sift' },
-  { key: 'qber', label: 'QBER' },
-  { key: 'correct', label: 'Correct' },
-  { key: 'amplify', label: 'Amplify' },
-];
-function freshPipeline() {
-  return PIPELINE_STEPS.map((s) => ({ ...s, status: 'pending', detail: '' }));
-}
+/** Per-frame QBER points kept for the strip chart. */
+const QBER_HISTORY_CAP = 120;
 
 /** BB84 aborts above this QBER — intercept-resend lands near 25%. */
 const QBER_THRESHOLD = 0.11;
@@ -60,7 +55,6 @@ let pendingRoomToken = '';
 let elapsedInterval = null;
 let socket = null;
 let webrtcManager = null;
-let metricsCollector = null;
 let localStream = null;
 let remoteStream = null;
 let bb84 = null;
@@ -104,12 +98,9 @@ function connectToSignaling(url) {
       // at all, so a derived key had nowhere to go — encryption never engaged.)
       webrtcManager = new WebRTCManager(socket, { enableEncryption: true });
 
-      // stepDelayMs paces the pipeline so each phase is visible on camera — a raw
-      // round completes in well under a second. It only affects presentation.
       bb84 = new BB84Orchestrator({
         webrtcManager,
         onStateChange: handleBB84State,
-        stepDelayMs: 500,
       });
 
       webrtcManager.on('room-created', (d) => {
@@ -139,23 +130,18 @@ function connectToSignaling(url) {
       webrtcManager.on('data-channel-open', () => {
         state.bb84Active = true;
         render();
-        // The DataChannel carries BB84's quantum + classical messages. The room
-        // creator runs the protocol as Alice; the joiner runs as Bob whenever
-        // the creator announces a round (it never self-starts, so an injected
-        // round-start can't wedge it into a phantom round). The room's
+        // The DataChannel carries the reservoir engine's frame + classical
+        // traffic. The room creator runs as the source (owns the photon
+        // bench / simulator); the joiner is the detector. The room's
         // capability token doubles as the channel-authentication secret.
-        bb84
-          .init({ roomToken: state.roomId, isInitiator: state.isInitiator })
-          .then(() => {
-            if (state.isInitiator) bb84.runRound(true);
-          })
-          .catch(() => {
-            // Auth bootstrap failed (fingerprints/HKDF): no round may run.
-            // Loud red state, never a silent fall-through to "establishing".
-            state.cipherState = 'compromised';
-            showToast('Secure-channel setup failed — no key will be established.');
-            render();
-          });
+        // init() starts continuous streaming itself — there are no rounds to
+        // kick off. A rejection here means the secure-channel bootstrap
+        // failed before any streaming; surface it loudly.
+        bb84.init({ roomToken: state.roomId, isInitiator: state.isInitiator }).catch(() => {
+          state.cipherState = 'compromised';
+          showToast('Secure-channel setup failed — no key will be established.');
+          render();
+        });
       });
       webrtcManager.on('data-channel-message', (d) => bb84.handleMessage(d));
       webrtcManager.on('peer-disconnected', () => {
@@ -196,119 +182,81 @@ function connectToSignaling(url) {
       });
     },
   );
-
-  import('./js/metrics.js').then(({ MetricsCollector }) => {
-    metricsCollector = new MetricsCollector();
-    metricsCollector.subscribe('qber-exceeded', () =>
-      showToast('QBER exceeded — possible eavesdropper!'),
-    );
-    metricsCollector.subscribe('key-budget-low', () => {
-      if (webrtcManager) startBB84Round();
-    });
-  });
 }
 
 /* ── BB84 ───────────────────────────────────────────────────────── */
 
 /**
- * Orchestrator lifecycle → UI. A completed round means the derived key is already
- * installed in the Insertable Streams crypto worker, so every frame from here on is
- * AES-128-GCM encrypted under a BB84 key. A failed round means the QBER exceeded the
- * 11% security threshold — the key is discarded and the orchestrator re-keys.
+ * Reservoir engine telemetry → UI. Keys are minted continuously and rotated
+ * into the crypto worker on a floored cadence; the cipher pill is driven by
+ * the worker's own cipher-state events (not from here), so this handler only
+ * maintains the dashboard and the loud failure states.
  */
 function handleBB84State(s) {
-  if (s.phase === 'running') {
-    // New round — reset the pipeline and light up the first step.
-    state.pipeline = freshPipeline();
-    setStep('transmit', 'active');
-  } else if (s.phase === 'progress') {
-    applyPipelineProgress(s);
-  } else if (s.phase === 'complete') {
-    state.qber = s.qber;
-    state.qberHistory.push(s.qber);
-    state.keyBudget = (s.metrics && s.metrics.keyLength) || 0;
-    state.keyIndex = s.keyIndex;
-    if (s.sas) state.sas = s.sas;
-    state.pipeline.forEach((st) => {
-      if (st.status !== 'failed') st.status = 'done';
-    });
-  } else if (s.phase === 'failed') {
-    if (s.reason === 'integrity') {
-      // A MAC/sequence/fingerprint check failed. That is tampering OR an
-      // ordinary fault (dropped message, version skew) — never assert MITM
-      // as fact on one event. The orchestrator retries; persistent failure
-      // arrives below as 'exhausted' and goes red there.
-      showToast('Channel integrity check failed — tampering or a connection fault. Retrying.');
-    } else {
+  switch (s.phase) {
+    case 'sas':
+      state.sas = s.sas;
+      break;
+    case 'mode':
+      state.mode = s.mode;
+      break;
+    case 'reservoir':
       if (typeof s.qber === 'number') {
         state.qber = s.qber;
         state.qberHistory.push(s.qber);
+        if (state.qberHistory.length > QBER_HISTORY_CAP) state.qberHistory.shift();
       }
-      setStep('qber', 'failed');
-      showToast('QBER above the 11% threshold — key rejected, re-keying.');
-    }
-  } else if (s.phase === 'error') {
-    showToast('Key exchange error — retrying.');
-  } else if (s.phase === 'exhausted') {
-    // Out of retries. Frames still ride the LAST good key (the worker never
-    // downgrades), but no fresh key is obtainable on this channel — show it
-    // red and leave the decision to the user.
-    state.cipherState = 'compromised';
-    showToast('Channel integrity lost — tampering or a persistent fault. Leave and retry.');
+      state.reservoirBits = s.pooledBits ?? state.reservoirBits;
+      state.mintBudget = s.mintBudget ?? state.mintBudget;
+      state.lastDetections = s.detections ?? state.lastDetections;
+      break;
+    case 'minted':
+      state.keysMinted++;
+      state.keyIndex = s.keyIndex;
+      state.poolDepth = s.poolDepth ?? state.poolDepth;
+      break;
+    case 'rotated':
+      state.rotations++;
+      state.poolDepth = s.poolDepth ?? state.poolDepth;
+      break;
+    case 'failed':
+      handleReservoirFailure(s);
+      break;
+    case 'exhausted':
+      // Out of recovery attempts. Frames still ride the LAST good key (the
+      // worker never downgrades), but no fresh key is obtainable — show it
+      // red and leave the decision to the user.
+      state.cipherState = 'compromised';
+      showToast('Channel integrity lost — tampering or a persistent fault. Leave and retry.');
+      break;
+    default:
+      break;
   }
   render();
 }
 
-/** Set a pipeline step's status (and optionally its detail line) by key. */
-function setStep(key, status, detail) {
-  const st = state.pipeline.find((s) => s.key === key);
-  if (!st) return;
-  st.status = status;
-  if (detail !== undefined) st.detail = detail;
-}
-
-/** Mark the step after `key` as active, if it's still pending. */
-function activateNext(key) {
-  const i = state.pipeline.findIndex((s) => s.key === key);
-  const next = state.pipeline[i + 1];
-  if (next && next.status === 'pending') next.status = 'active';
-}
-
-// A per-phase 'progress' event means that step just finished; render its result
-// and light up the next one. The QBER step is special: a value over the
-// threshold ends the round there (Correct/Amplify never run), so it goes
-// straight to failed rather than done.
-function applyPipelineProgress(s) {
-  if (s.step === 'abort') {
-    setStep('qber', 'failed');
-    return;
+/** A single failed frame/session is transient; only 'exhausted' is terminal. */
+function handleReservoirFailure(s) {
+  if (s.reason === 'qber-exceeded') {
+    if (typeof s.qber === 'number') {
+      state.qber = s.qber;
+      state.qberHistory.push(s.qber);
+      if (state.qberHistory.length > QBER_HISTORY_CAP) state.qberHistory.shift();
+    }
+    showToast('QBER above the 11% threshold — frame rejected.');
+  } else if (s.reason === 'setup') {
+    state.cipherState = 'compromised';
+    showToast('Secure-channel setup failed — no key will be established.');
+  } else if (s.reason === 'timeout') {
+    // A silent stretch; the session restarts on its own. No alarm.
+  } else {
+    // integrity / protocol / divergence: tampering OR an ordinary fault
+    // (dropped message, version skew) — never assert MITM from one event.
+    showToast('Channel integrity check failed — tampering or a connection fault. Recovering.');
   }
-  const detail = {
-    transmit: () => `${s.sent.toLocaleString()} qubits`,
-    sift: () => `${s.sifted} / ${s.raw.toLocaleString()}`,
-    qber: () => `${(s.qber * 100).toFixed(1)}%`,
-    correct: () => `${s.bits} bits`,
-    amplify: () => `${s.keyLength}-bit key`,
-  }[s.step];
-  const text = detail ? detail() : '';
-  if (s.step === 'qber' && s.qber > QBER_THRESHOLD) {
-    setStep('qber', 'failed', text);
-    return;
-  }
-  setStep(s.step, 'done', text);
-  activateNext(s.step);
 }
 
-/**
- * Start another key-exchange round (also fired when the key budget runs low).
- * Only the initiator starts rounds; the joiner's orchestrator follows the
- * initiator's round-start announcements.
- */
-function startBB84Round() {
-  if (bb84 && state.isInitiator) bb84.runRound(true);
-}
-
-/** Security status of the most recent round, as a `.qd-status--*` suffix. */
+/** Security status of the most recent frame, as a `.qd-status--*` suffix. */
 function qberStatus() {
   if (state.qber === null) return 'normal';
   if (state.qber > QBER_THRESHOLD) return 'danger';
@@ -323,10 +271,23 @@ function qberStatusLabel() {
   return 'Secure';
 }
 
+/** Backend badge text — never claims photons the backend didn't produce. */
+function modeBadge() {
+  if (state.mode === 'optical') return 'OPTICAL';
+  return 'SIMULATED';
+}
+
+/** Reservoir fill fraction (0-1) toward the key currently being distilled. */
+function distillFraction() {
+  if (!state.mintBudget || state.mintBudget <= 0) return 0;
+  return Math.min(1, state.reservoirBits / state.mintBudget);
+}
+
 /**
- * Toggle the simulated intercept-resend eavesdropper and immediately re-key, so
- * the effect is visible within one round rather than after the retry delay.
- * Only the initiator sees this control — Alice owns the simulated channel.
+ * Toggle the simulated intercept-resend eavesdropper. The reservoir engine
+ * applies it to the next frame and, if the channel had latched, clears the
+ * latch so recovery to green is visible. Only the source side (the initiator
+ * in simulated mode) sees this control — it owns the simulated channel.
  */
 function toggleEavesdropper() {
   if (!bb84) return;
@@ -338,10 +299,9 @@ function toggleEavesdropper() {
       : 'Eve removed — the channel should return to normal noise.',
   );
   render();
-  startBB84Round();
 }
 
-/** QBER-per-round sparkline with the 11% abort threshold drawn in. */
+/** Per-frame QBER strip chart with the 11% abort threshold drawn in. */
 function drawQberChart() {
   const c = document.getElementById('qd-chart');
   if (!c) return;
@@ -513,13 +473,18 @@ function resetSession() {
   state.bb84Active = false;
   state.qber = null;
   state.qberHistory = [];
-  state.keyBudget = 0;
   state.keyIndex = null;
+  state.mode = null;
+  state.reservoirBits = 0;
+  state.mintBudget = null;
+  state.keysMinted = 0;
+  state.rotations = 0;
+  state.poolDepth = 0;
+  state.lastDetections = null;
   state.cipherState = 'establishing';
   state.joinLink = '';
   state.sas = null;
   state.eavesdropper = false;
-  state.pipeline = [];
   stopTimer();
   clearRemoteVideo();
 }
@@ -672,26 +637,19 @@ function render() {
             state.bb84Active
               ? `
             <div class="qd-header">
-              <span class="qd-title">BB84 Quantum Channel</span>
+              <span class="qd-title">BB84 Key Reservoir</span>
+              <span class="qd-mode qd-mode--${state.mode || 'pending'}">${modeBadge()}</span>
               <span class="qd-badge qd-status--${qberStatus()}">${qberStatusLabel()}</span>
             </div>
-            ${
-              state.pipeline.length
-                ? `<div class="qd-pipeline">${state.pipeline
-                    .map(
-                      (st) => `
-              <div class="qd-step qd-step--${st.status}">
-                <span class="qd-step-label">${st.label}</span>
-                <span class="qd-step-detail">${st.detail || ''}</span>
-              </div>`,
-                    )
-                    .join('')}</div>`
-                : ''
-            }
+            <div class="qd-distill">
+              <div class="qd-distill-bar"><span class="qd-distill-fill" style="width:${(distillFraction() * 100).toFixed(0)}%"></span></div>
+              <span class="qd-distill-label">Distilling next key — ${state.reservoirBits.toLocaleString()}${state.mintBudget ? ` / ${state.mintBudget.toLocaleString()}` : ''} sifted bits</span>
+            </div>
             <div class="qd-metrics">
               <div class="qd-metric"><span class="qd-metric-value ${state.qber !== null && state.qber > QBER_THRESHOLD ? 'qd-metric--danger' : state.qber !== null && state.qber > QBER_WARNING ? 'qd-metric--warning' : ''}">${state.qber !== null ? (state.qber * 100).toFixed(1) + '%' : '--'}</span><span class="qd-metric-label">QBER</span></div>
-              <div class="qd-metric"><span class="qd-metric-value">${state.qberHistory.length}</span><span class="qd-metric-label">Rounds</span></div>
-              <div class="qd-metric"><span class="qd-metric-value">${state.keyBudget}</span><span class="qd-metric-label">Key bits</span></div>
+              <div class="qd-metric"><span class="qd-metric-value">${state.keysMinted}</span><span class="qd-metric-label">Keys</span></div>
+              <div class="qd-metric"><span class="qd-metric-value">${state.rotations}</span><span class="qd-metric-label">Rotations</span></div>
+              <div class="qd-metric"><span class="qd-metric-value">${state.poolDepth}</span><span class="qd-metric-label">Pool</span></div>
             </div>
             <canvas id="qd-chart" class="qd-chart"></canvas>
             ${state.isInitiator ? `<button class="qd-eve-btn ${state.eavesdropper ? 'qd-eve-btn--active' : ''}" onclick="toggleEavesdropper()">${state.eavesdropper ? 'Eavesdropper active — click to remove' : 'Simulate eavesdropper'}</button>` : ''}`

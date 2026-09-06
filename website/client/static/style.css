@@ -806,6 +806,50 @@ input {
   background: rgba(234, 105, 98, 0.2);
 }
 
+/* Backend badge — honest about whether photons were real. */
+.qd-mode {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  margin-left: auto;
+  margin-right: 8px;
+}
+.qd-mode--pending,
+.qd-mode--sim {
+  color: var(--text-secondary);
+}
+.qd-mode--optical {
+  color: var(--success);
+}
+
+/* Distillation fill gauge — the key currently being pooled. */
+.qd-distill {
+  margin-bottom: 8px;
+}
+.qd-distill-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(127, 127, 127, 0.18);
+  overflow: hidden;
+}
+.qd-distill-fill {
+  display: block;
+  height: 100%;
+  background: var(--success);
+  transition: width 0.25s ease;
+}
+.qd-distill-label {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.62rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 .qd-metrics {
   display: flex;
   gap: 16px;

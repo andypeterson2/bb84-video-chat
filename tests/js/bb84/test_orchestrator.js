@@ -1,27 +1,25 @@
 /**
- * BB84Orchestrator — the seam between the protocol and the WebRTC transport.
+ * BB84Orchestrator — the seam between key production and the WebRTC transport.
  *
  * This suite exists because that seam had no coverage at all: the orchestrator
- * handed each derived key to a `enableEncryption()` method that WebRTCManager
- * never defined, so keys were silently dropped and the video was never actually
- * encrypted. Nothing failed — there was simply no test that put the two classes
- * together. The fake peer below therefore rejects any method the REAL
- * WebRTCManager does not define, so that class of bug cannot come back.
+ * handed each derived key to a method WebRTCManager never defined, so keys were
+ * silently dropped and the video was never encrypted. The fake peer rejects any
+ * method the REAL WebRTCManager does not define, so that class of bug cannot
+ * come back. The engine now streams continuously, so tests wait for keys to
+ * mint rather than driving discrete rounds.
  */
 import { BB84Orchestrator } from '../../../website/client/static/js/bb84/orchestrator.js';
 import { WebRTCManager } from '../../../website/client/static/js/webrtc.js';
-import { orchestratorPair, USED_METHODS } from './harness.js';
+import { orchestratorPair, USED_METHODS, fastTimers, clearTimers } from './harness.js';
 
-/** Convenience: a plain (unauthenticated) pair, initialized and ready. */
 async function pair(options = {}) {
   const p = orchestratorPair(options);
   await p.init();
   return p;
 }
 
-afterEach(() => {
-  delete globalThis.QVC_ROUND_DEADLINE_MS;
-});
+beforeEach(fastTimers);
+afterEach(clearTimers);
 
 describe('BB84Orchestrator ↔ WebRTCManager contract', () => {
   test('every WebRTCManager method the orchestrator calls actually exists', () => {
@@ -35,57 +33,49 @@ describe('BB84Orchestrator ↔ WebRTCManager contract', () => {
   });
 });
 
-describe('BB84Orchestrator rounds', () => {
-  test('a completed round installs one matching key on both peers', async () => {
+describe('BB84Orchestrator key production', () => {
+  test('streaming mints one matching key on both peers', async () => {
     const p = await pair();
     try {
-      await p.round();
-
-      const doneAlice = p.states.alice.find((s) => s.phase === 'complete');
-      const doneBob = p.states.bob.find((s) => s.phase === 'complete');
-      expect(doneAlice).toBeTruthy();
-      expect(doneBob).toBeTruthy();
-      expect(doneAlice.qber).toBeLessThan(0.11);
-
-      // The key reached the encryption pipeline — the step that was broken.
-      expect(p.installed.alice).toHaveLength(1);
-      expect(p.installed.bob).toHaveLength(1);
+      await p.untilMinted(1);
       expect(p.installed.alice[0].keyIndex).toBe(0);
       expect(p.installed.bob[0].keyIndex).toBe(0);
-
       // 128-bit key, identical on both sides, or the peers cannot talk.
       expect(p.installed.alice[0].key).toHaveLength(16);
       expect(Array.from(p.installed.alice[0].key)).toEqual(Array.from(p.installed.bob[0].key));
+      // Reservoir telemetry surfaced healthy frames.
+      const frame = p.phases('alice', 'reservoir').at(-1);
+      expect(frame.qber).toBeLessThan(0.11);
+      expect(frame.accepted).toBe(true);
     } finally {
       p.destroy();
     }
   });
 
-  test('consecutive rounds advance the key index', async () => {
+  test('the reservoir keeps minting, advancing the key index', async () => {
     const p = await pair();
     try {
-      await p.round();
-      await p.round();
-      expect(p.installed.alice.map((k) => k.keyIndex)).toEqual([0, 1]);
+      await p.untilMinted(3);
+      expect(p.installed.alice.slice(0, 3).map((k) => k.keyIndex)).toEqual([0, 1, 2]);
+      for (let i = 0; i < 3; i++) {
+        expect(Array.from(p.installed.alice[i].key)).toEqual(Array.from(p.installed.bob[i].key));
+      }
     } finally {
       p.destroy();
     }
   });
 
-  test('an eavesdropper drives QBER past 11% and no key is installed', async () => {
+  test('an eavesdropper drives per-frame QBER past 11% and no key is installed', async () => {
     const p = await pair();
     try {
       p.alice.setEavesdropper(true);
       expect(p.alice.eavesdropperEnabled).toBe(true);
-
-      await p.round();
-
-      const failed = p.states.alice.find((s) => s.phase === 'failed');
-      expect(failed).toBeTruthy();
-      expect(failed.reason).toBe('qber-exceeded');
-      expect(failed.qber).toBeGreaterThan(0.11);
-
-      // The whole point: a compromised channel yields no usable key.
+      await p.waitFor(() => {
+        expect(p.phases('alice', 'exhausted').length).toBeGreaterThanOrEqual(1);
+      });
+      const failed = p.phases('alice', 'failed');
+      expect(failed.length).toBeGreaterThanOrEqual(3);
+      for (const f of failed) expect(f.reason).toBe('qber-exceeded');
       expect(p.installed.alice).toHaveLength(0);
       expect(p.installed.bob).toHaveLength(0);
     } finally {
@@ -93,17 +83,17 @@ describe('BB84Orchestrator rounds', () => {
     }
   });
 
-  test('removing the eavesdropper lets the next round succeed again', async () => {
+  test('removing the eavesdropper recovers the channel and mints again', async () => {
     const p = await pair();
     try {
       p.alice.setEavesdropper(true);
-      await p.round();
+      await p.waitFor(() => {
+        expect(p.phases('alice', 'exhausted').length).toBeGreaterThanOrEqual(1);
+      });
       expect(p.installed.alice).toHaveLength(0);
 
       p.alice.setEavesdropper(false);
-      await p.round();
-
-      expect(p.installed.alice).toHaveLength(1);
+      await p.untilMinted(1);
       expect(Array.from(p.installed.alice[0].key)).toEqual(Array.from(p.installed.bob[0].key));
     } finally {
       p.destroy();
@@ -111,169 +101,94 @@ describe('BB84Orchestrator rounds', () => {
   });
 });
 
-// The live pipeline drives the on-screen stepper (Transmit → Sift → QBER →
-// Correct → Amplify). These assert the phases actually emit, in order, so the
-// UI can't silently fall out of step with the protocol.
-describe('BB84Orchestrator live pipeline', () => {
-  const progressSteps = (states) => states.filter((s) => s.phase === 'progress').map((s) => s.step);
-
-  test('a successful round emits every phase in pipeline order', async () => {
-    const p = await pair();
+describe('BB84Orchestrator reservoir telemetry', () => {
+  test('a healthy call emits mode, sas, reservoir, minted and rotated events', async () => {
+    const p = await pair({
+      aliceToken: 'kRYfDKu2PNjHsguWlukncg',
+      bobToken: 'kRYfDKu2PNjHsguWlukncg',
+    });
     try {
-      await p.round();
-      expect(progressSteps(p.states.alice)).toEqual([
-        'transmit',
-        'sift',
-        'qber',
-        'correct',
-        'amplify',
-      ]);
-      // 'running' opens the round before any step; 'complete' closes it.
-      expect(p.states.alice[0].phase).toBe('running');
-      expect(p.states.alice.at(-1).phase).toBe('complete');
-    } finally {
-      p.destroy();
-    }
-  });
-
-  test('an eavesdropped round halts at qber with an abort phase — no correct/amplify', async () => {
-    const p = await pair();
-    try {
-      p.alice.setEavesdropper(true);
-      await p.round();
-      const steps = progressSteps(p.states.alice);
-      expect(steps).toEqual(['transmit', 'sift', 'qber', 'abort']);
-      expect(steps).not.toContain('correct');
-      expect(steps).not.toContain('amplify');
-    } finally {
-      p.destroy();
-    }
-  });
-});
-
-// Alice-initiated re-keys (budget-low, eavesdropper toggle) announce the round
-// over the control channel so Bob's side actually runs — without it, Alice's
-// qubits sat unread in Bob's queue and the round deadlocked.
-describe('BB84Orchestrator round-start announcements', () => {
-  test("alice alone starting a round also runs bob's side to completion", async () => {
-    const p = await pair();
-    try {
-      await p.round(); // initial round, as data-channel-open would
-      await p.alice.runRound(true); // re-key initiated by alice ONLY
-      await vi.waitFor(() => {
-        expect(p.states.bob.filter((s) => s.phase === 'complete')).toHaveLength(2);
+      await p.untilMinted(1);
+      expect(p.phases('alice', 'mode').at(-1).mode).toBe('sim');
+      expect(p.phases('alice', 'sas')).toHaveLength(1);
+      expect(p.phases('alice', 'reservoir').length).toBeGreaterThan(0);
+      expect(p.phases('alice', 'minted').length).toBeGreaterThanOrEqual(1);
+      await p.waitFor(() => {
+        expect(p.phases('alice', 'rotated').length).toBeGreaterThanOrEqual(1);
       });
-      expect(p.installed.alice.map((k) => k.keyIndex)).toEqual([0, 1]);
-      expect(p.installed.bob.map((k) => k.keyIndex)).toEqual([0, 1]);
     } finally {
       p.destroy();
     }
   });
 });
 
-// The review's central liveness finding: every mux receive could suspend
-// forever (silent peer, injected junk, teardown mid-round), pinning the
-// orchestrator with no timeout anywhere. These pin the cancellation
-// machinery: round deadline, destroy/re-init, and round-start hygiene.
 describe('BB84Orchestrator liveness', () => {
-  /** An orchestrator whose peer never answers anything. */
-  const silent = () => {
+  test('a silent peer trips the stream watchdog: a failed session, not a hang', async () => {
+    globalThis.QVC_STREAM_WATCHDOG_MS = 150;
     const states = [];
     const orch = new BB84Orchestrator({
-      webrtcManager: { sendData: () => {}, setEncryptionKey: () => {} },
+      webrtcManager: {
+        sendData: () => {},
+        setEncryptionKey: () => {},
+        getDtlsFingerprints: () => ({ local: 'A', remote: 'B' }),
+      },
       onStateChange: (s) => states.push(s),
     });
-    return { orch, states };
-  };
-
-  test('a silent peer trips the round deadline: failed round, not a hang', async () => {
-    globalThis.QVC_ROUND_DEADLINE_MS = 100;
-    const { orch, states } = silent();
-    orch.init({ isInitiator: true });
+    // Detector role (joiner) with no peer: no frame-open ever arrives.
+    await orch.init({ isInitiator: false });
     try {
-      await orch.runRound(true);
-      const failed = states.find((s) => s.phase === 'failed');
-      expect(failed).toBeTruthy();
-      expect(failed.reason).toBe('timeout');
+      await vi.waitFor(
+        () => {
+          expect(states.some((s) => s.phase === 'failed' && s.reason === 'timeout')).toBe(true);
+        },
+        { timeout: 3000, interval: 20 },
+      );
     } finally {
       orch.destroy();
     }
   });
 
-  test('destroy mid-round resolves the round, and re-init runs a fresh one', async () => {
+  test('destroy mid-stream settles everything, and re-init mints a fresh key', async () => {
     const p = await pair();
     try {
-      const inFlight = p.alice.runRound(true);
+      await p.untilMinted(1);
       p.alice.destroy();
-      await inFlight; // must settle — a destroyed round may not hang forever
+      p.bob.destroy();
+      const before = p.installed.alice.length;
+      await new Promise((r) => setTimeout(r, 100));
+      expect(p.installed.alice.length).toBe(before); // no late installs
 
-      // Fresh session over the same transport: both sides re-init (closing
-      // bob's wedged round) and a full round completes end to end.
       await p.init();
-      await p.round();
-      expect(p.states.alice.filter((s) => s.phase === 'complete')).toHaveLength(1);
+      await p.untilMinted(1);
       expect(p.installed.bob.at(-1).key).toHaveLength(16);
     } finally {
       p.destroy();
     }
   });
 
-  test('the initiator ignores an injected round-start', async () => {
+  test('junk on the classical wire costs a session; the restart recovers', async () => {
+    // Generous frame deadline so a spurious slow frame under parallel test
+    // load can't stack extra failures toward the latch (this exercises the
+    // restart path, not the exhausted path).
+    globalThis.QVC_FRAME_DEADLINE_MS = 3000;
     const p = await pair();
     try {
-      p.alice.handleMessage(JSON.stringify({ ch: 'control', payload: { type: 'round-start' } }));
-      await new Promise((r) => setTimeout(r, 20));
-      expect(p.states.alice).toHaveLength(0);
-    } finally {
-      p.destroy();
-    }
-  });
-
-  test('a round-start during a round is deferred, not discarded', async () => {
-    globalThis.QVC_ROUND_DEADLINE_MS = 100;
-    const { orch, states } = silent();
-    orch.init({ isInitiator: false });
-    try {
-      orch.runRound(false); // wedged round: nothing ever arrives
-      orch.handleMessage(JSON.stringify({ ch: 'control', payload: { type: 'round-start' } }));
-      await vi.waitFor(() => {
-        // Wedged round times out, then the remembered announcement runs.
-        expect(states.filter((s) => s.phase === 'failed')).not.toHaveLength(0);
-        expect(states.filter((s) => s.phase === 'running').length).toBeGreaterThanOrEqual(2);
-      });
-    } finally {
-      orch.destroy();
-    }
-  });
-
-  test('junk injected before a round is flushed by the round-start announcement', async () => {
-    const p = await pair();
-    try {
-      p.bob.handleMessage(JSON.stringify({ ch: 'classical', payload: { type: 'junk' } }));
-      await p.round();
-      expect(p.installed.alice).toHaveLength(1);
-      expect(Array.from(p.installed.alice[0].key)).toEqual(Array.from(p.installed.bob[0].key));
-    } finally {
-      p.destroy();
-    }
-  });
-
-  test('junk injected mid-round costs that round and the next one recovers', async () => {
-    globalThis.QVC_ROUND_DEADLINE_MS = 500;
-    // Slow bob's pipeline down so the injection lands before his classical reads.
-    const p = await pair({ bobStepDelayMs: 30 });
-    try {
-      const r1 = p.alice.runRound(true);
-      await vi.waitFor(() => {
-        expect(p.states.bob.some((s) => s.phase === 'running')).toBe(true);
-      });
-      p.bob.handleMessage(JSON.stringify({ ch: 'classical', payload: { type: 'junk' } }));
-      await r1; // desynced: bob aborts on the junk, alice times out — no hang
-      expect(p.installed.alice).toHaveLength(0);
-
-      await p.round(); // the next round-start flushes the stale queues
-      expect(p.installed.alice).toHaveLength(1);
-      expect(Array.from(p.installed.alice[0].key)).toEqual(Array.from(p.installed.bob[0].key));
+      await p.untilMinted(1);
+      const before = p.installed.alice.length;
+      // Corrupt bob's stream: a malformed classical message desyncs the
+      // session; it tears down and the source announces a fresh one.
+      p.bob.handleMessage(
+        JSON.stringify({ ch: 'classical', payload: { type: 'frame-open', frameId: -7 } }),
+      );
+      await p.waitFor(() => {
+        expect(p.installed.alice.length).toBeGreaterThan(before);
+        expect(p.installed.bob.length).toBeGreaterThan(before);
+      }, 12000);
+      const n = Math.min(p.installed.alice.length, p.installed.bob.length);
+      for (let i = 0; i < n; i++) {
+        expect(p.installed.alice[i].keyIndex).toBe(p.installed.bob[i].keyIndex);
+        expect(Array.from(p.installed.alice[i].key)).toEqual(Array.from(p.installed.bob[i].key));
+      }
     } finally {
       p.destroy();
     }

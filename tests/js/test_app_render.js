@@ -158,12 +158,32 @@ describe('cipher pill', () => {
     }
   });
 
-  test('the quantum panel has no separate AES-GCM tile (the pill owns it)', () => {
+  test('the reservoir dashboard shows QBER, keys, rotations and pool — no AES-GCM tile', () => {
     app.state.peerConnected = true;
     app.state.bb84Active = true;
     app.render();
     const labels = [...document.querySelectorAll('.qd-metric-label')].map((n) => n.textContent);
-    expect(labels).toEqual(['QBER', 'Rounds', 'Key bits']);
+    expect(labels).toEqual(['QBER', 'Keys', 'Rotations', 'Pool']);
+  });
+
+  test('the mode badge reads SIMULATED until an optical backend negotiates', () => {
+    app.state.peerConnected = true;
+    app.state.bb84Active = true;
+    app.render();
+    expect(document.querySelector('.qd-mode').textContent).toBe('SIMULATED');
+    app.state.mode = 'optical';
+    app.render();
+    expect(document.querySelector('.qd-mode').textContent).toBe('OPTICAL');
+  });
+
+  test('the distillation gauge fills toward the mint budget', () => {
+    app.state.peerConnected = true;
+    app.state.bb84Active = true;
+    app.state.reservoirBits = 110;
+    app.state.mintBudget = 220;
+    app.render();
+    const fill = document.querySelector('.qd-distill-fill');
+    expect(fill.style.width).toBe('50%');
   });
 });
 

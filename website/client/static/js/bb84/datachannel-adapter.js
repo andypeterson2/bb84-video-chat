@@ -5,8 +5,6 @@
  * Message envelope: JSON { ch: 'quantum'|'classical', payload: <data> }
  */
 
-import { SimulatedQuantumChannel } from './simulated.js';
-
 /** A receive cancelled by teardown or a round deadline — NOT peer data. */
 export class MuxAbortError extends Error {
   constructor(message, reason) {
@@ -148,7 +146,7 @@ export class DataChannelMux {
    * Route an incoming DataChannel message to the correct queue.
    *
    * Hardened against a hostile peer: malformed JSON and unknown channel
-   * names are dropped (the typed-message layer in protocol.js turns any
+   * names are dropped (the typed-message layer in the reservoir engine turns any
    * resulting gap into a clean protocol-error abort), and per-channel
    * buffers are capped so a flood can't grow memory without bound.
    *
@@ -231,67 +229,6 @@ export class DataChannelMux {
       this._queues[name] = { buffer: [], waiters: [] };
     }
     return this._queues[name];
-  }
-}
-
-/**
- * QuantumChannel adapter for Alice — runs SimulatedQuantumChannel locally,
- * then sends the simulated output over the DataChannel to Bob.
- */
-export class AliceQuantumChannel {
-  /**
-   * @param {DataChannelMux} mux
-   * @param {object} [simOptions] - options for SimulatedQuantumChannel
-   * @param {AbortSignal} [signal] - per-round deadline/teardown signal
-   */
-  constructor(mux, simOptions = {}, signal = undefined) {
-    this._mux = mux;
-    this._signal = signal;
-    this._sim = new SimulatedQuantumChannel(simOptions);
-    this._receiver = this._sim.createReceiver();
-  }
-
-  /** Toggle eavesdropper on the simulated channel. */
-  setEavesdropper(enabled) {
-    this._sim.setEavesdropper(enabled);
-  }
-
-  /**
-   * Simulate qubit transmission locally, then send results to Bob.
-   * @param {Array<{bit: number, basis: number}>} qubits
-   */
-  async sendQubits(qubits) {
-    await this._sim.sendQubits(qubits);
-    const simulated = await this._receiver.receiveQubits();
-    this._mux.send('quantum', simulated);
-  }
-
-  async receiveQubits() {
-    return this._mux.receive('quantum', { signal: this._signal });
-  }
-}
-
-/**
- * QuantumChannel adapter for Bob — receives simulated qubits from Alice
- * over the DataChannel.
- */
-export class BobQuantumChannel {
-  /**
-   * @param {DataChannelMux} mux
-   * @param {AbortSignal} [signal] - per-round deadline/teardown signal
-   */
-  constructor(mux, signal = undefined) {
-    this._mux = mux;
-    this._signal = signal;
-  }
-
-  async sendQubits(qubits) {
-    this._mux.send('quantum', qubits);
-  }
-
-  /** @returns {Promise<Array<{bit: number, basis: number, detected: boolean}>>} */
-  async receiveQubits() {
-    return this._mux.receive('quantum', { signal: this._signal });
   }
 }
 

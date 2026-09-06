@@ -1,10 +1,11 @@
 /**
- * Shared orchestrator test harness.
+ * Shared orchestrator test harness (reservoir model).
  *
  * One strict fake WebRTCManager for every orchestrator suite: any method the
  * REAL WebRTCManager does not define throws (that trap caught the key-handoff
- * API drifting once already), and rounds are driven the way the app drives
- * them — the initiator announces, the joiner only ever follows announcements.
+ * API drifting once already). Two orchestrators are wired over a fake ordered
+ * DataChannel; after init() both stream continuously, so tests wait for keys
+ * to mint rather than driving discrete rounds.
  */
 import { vi, expect } from 'vitest';
 import { BB84Orchestrator } from '../../../website/client/static/js/bb84/orchestrator.js';
@@ -18,7 +19,20 @@ export const MIRROR_FPS = {
   bob: { local: 'BB:22:BB', remote: 'AA:11:AA' },
 };
 
-const TERMINAL = new Set(['complete', 'failed', 'error']);
+/** Fast timing so the continuous engine runs in milliseconds under test. */
+export function fastTimers() {
+  globalThis.QVC_FRAME_PERIOD_MS = 3;
+  globalThis.QVC_FRAME_DEADLINE_MS = 600;
+  globalThis.QVC_STREAM_WATCHDOG_MS = 1200;
+  globalThis.QVC_ROTATION_FLOOR_MS = 0;
+  globalThis.QVC_SESSION_RESTART_DELAY_MS = 15;
+}
+
+export function clearTimers() {
+  for (const k of Object.keys(globalThis).filter((n) => n.startsWith('QVC_'))) {
+    delete globalThis[k];
+  }
+}
 
 /**
  * Two orchestrators wired to each other over a fake ordered DataChannel.
@@ -29,14 +43,13 @@ const TERMINAL = new Set(['complete', 'failed', 'error']);
  * @param {function(string, string): string|null} [options.tamper] - given
  *   (senderName, wireData), return the (possibly altered) wire data, or null
  *   to drop the message entirely
- * @param {number} [options.bobStepDelayMs] - slow bob's pipeline (to land
- *   injections deterministically before his reads)
+ * @param {number} [options.slotsPerFrame]
  */
 export function orchestratorPair({
   aliceToken = null,
   bobToken = null,
   tamper = null,
-  bobStepDelayMs = 0,
+  slotsPerFrame = 2048,
 } = {}) {
   const installed = { alice: [], bob: [] };
   const states = { alice: [], bob: [] };
@@ -46,8 +59,6 @@ export function orchestratorPair({
   const transport = (self, other) =>
     new Proxy(
       {
-        // A real DataChannel delivers asynchronously; mirror that so the two
-        // protocol runs interleave the way they do in the browser.
         sendData: (data) => {
           const wire = tamper ? tamper(self, data) : data;
           if (wire === null) return;
@@ -74,14 +85,15 @@ export function orchestratorPair({
   peers.alice = new BB84Orchestrator({
     webrtcManager: transport('alice', 'bob'),
     onStateChange: (s) => states.alice.push(s),
+    slotsPerFrame,
   });
   peers.bob = new BB84Orchestrator({
     webrtcManager: transport('bob', 'alice'),
     onStateChange: (s) => states.bob.push(s),
-    stepDelayMs: bobStepDelayMs,
+    slotsPerFrame,
   });
 
-  const settled = (side) => states[side].filter((s) => TERMINAL.has(s.phase)).length;
+  const phases = (side, phase) => states[side].filter((s) => s.phase === phase);
 
   return {
     alice: peers.alice,
@@ -89,24 +101,23 @@ export function orchestratorPair({
     installed,
     states,
     fpCalls,
-    /** (Re-)initialize both sides, with the configured tokens when given. */
+    phases,
+    /** (Re-)initialize and start both sides. */
     init: async () => {
       await peers.alice.init({ roomToken: aliceToken, isInitiator: true });
       await peers.bob.init({ roomToken: bobToken, isInitiator: false });
     },
-    /**
-     * Runs one round: alice initiates, bob joins via the round-start
-     * announcement — exactly how the app drives it (the joiner never
-     * self-starts). Resolves when both sides reach a terminal phase.
-     */
-    round: async () => {
-      const target = settled('bob') + 1;
-      await peers.alice.runRound(true);
-      await vi.waitFor(() => {
-        expect(settled('bob')).toBeGreaterThanOrEqual(target);
-      });
-    },
-    // Clears the pending retry timers a failed round schedules.
+    /** Wait until both sides have installed at least `n` keys. */
+    untilMinted: (n, timeout = 8000) =>
+      vi.waitFor(
+        () => {
+          expect(installed.alice.length).toBeGreaterThanOrEqual(n);
+          expect(installed.bob.length).toBeGreaterThanOrEqual(n);
+        },
+        { timeout, interval: 20 },
+      ),
+    /** Wait for an arbitrary predicate over both sides' state. */
+    waitFor: (fn, timeout = 8000) => vi.waitFor(fn, { timeout, interval: 20 }),
     destroy: () => {
       peers.alice.destroy();
       peers.bob.destroy();
