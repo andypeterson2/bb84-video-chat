@@ -1097,3 +1097,47 @@ input {
   cursor: pointer;
   font-size: 0.8rem;
 }
+
+/* ── Optical bench settings (lobby) ─────────────────────────────────────── */
+.optical {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.optical-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.optical-toggle input {
+  accent-color: var(--accent);
+}
+.optical-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.optical-input {
+  background: var(--input-bg);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  border-radius: 0;
+}
+.optical-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+.optical-hint {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
