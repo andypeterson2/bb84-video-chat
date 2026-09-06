@@ -5,8 +5,9 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint . && prettier --check 'website/client/static/**/*.js' 'tests/js/**/*.js' vitest.config.js",
-    "format": "prettier --write 'website/client/static/**/*.js' 'tests/js/**/*.js' vitest.config.js"
+    "lint": "eslint . && prettier --check 'website/client/static/**/*.js' 'tests/js/**/*.js' 'tests/e2e/**/*.{js,mjs}' vitest.config.js playwright.config.js",
+    "format": "prettier --write 'website/client/static/**/*.js' 'tests/js/**/*.js' 'tests/e2e/**/*.{js,mjs}' vitest.config.js playwright.config.js",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -15,7 +16,8 @@
     "globals": "^16.5.0",
     "jsdom": "^26.1.0",
     "prettier": "^3.9.6",
-    "vitest": "^3.1.1"
+    "vitest": "^3.1.1",
+    "@playwright/test": "^1.50.0"
   },
   "prettier": {
     "semi": true,

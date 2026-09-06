@@ -1,0 +1,22 @@
+role = "detector"
+seed = 1
+[source]
+mu = 0.1
+[detector]
+efficiency = 0.83
+dark_rate_cps = 50.0
+jitter_sigma_ps = 40.0
+dead_time_ns = 33.0
+gate_fraction = 0.4
+[timing]
+rep_rate_hz = 100e6
+slots_per_frame = 6000
+frame_period_ms = 40.0
+[sync]
+mode = "qubit"
+sync_slots = 2048
+[net]
+ws_host = "127.0.0.1"
+ws_port = 8781
+fiber_host = "127.0.0.1"
+fiber_port = 8791

@@ -1,88 +1,64 @@
 @startuml quantum-layer
 !include style.puml
 
-title BB84 Quantum Layer — Component Diagram
+title BB84 Quantum Layer — Reservoir Engine + Pluggable Backends
 
-package "shared/bb84/" {
-    component [PhysicalLayerSimulator] as PLS {
-        component [PhotonSource] as PS
-        component [QuantumChannel] as QC
-        component [SinglePhotonDetector] as SPD
+package "browser (per peer)" {
+    component [ReservoirEngine] as Engine {
+        component [per-frame sift + QBER gate] as Sift
+        component [pooled distill\n(parities + verify hash + Toeplitz)] as Distill
+        component [rotation\n(floored, 4-key pool)] as Rot
     }
-
-    component [BB84Protocol] as Proto {
-        component [Sifting] as Sift
-        component [QBER Estimation] as QBER
-        component [Cascade\nError Correction] as Cascade
-        component [Toeplitz\nPrivacy Amplification] as PA
-    }
-
-    component [EavesdropperSimulator] as Eve
-    component [QBERMonitor] as Monitor
-    component [AbstractHardwareBridge] as Bridge
-    component [MATLABBridge] as MATLAB
-    component [QiskitValidator] as Qiskit
+    interface "FrameSource" as FS
+    component [LoopbackFrameSource\n(SimulatedQuantumChannel)] as Loop
+    component [DaemonFrameSource\n(WebSocket to daemon)] as DaemonSrc
+    component [crypto worker\n(AES-128-GCM, 2-key ring)] as Worker
+    component [channel-auth\n(HMAC envelopes + SAS)] as Auth
 }
 
-package "shared/" {
-    component [BB84KeyGenerator] as KG
-    component [HardwareKeyGenerator] as HKG
-    component [Encryption Registry] as Reg
+package "bench daemon (per peer, optical mode)" {
+    interface "drivers.py ABCs\n(THE SWAP LINE)" as Drivers
+    component [EmulatedAWG] as AWG
+    component [EmulatedTimeTagger] as Tagger
+    component [alignment + slot_recovery\n(Qubit4Sync)] as Recover
+    component [eve.py\n(intercept-resend tap)] as Eve
 }
 
-package "server/utils/" {
-    component [AV\n(Key Rotation)] as AV
-}
+' Backend selection
+FS <|.. Loop
+FS <|.. DaemonSrc
+Engine --> FS : frames in / detections out
 
-package "server/" {
-    component [SocketAPI\n(qber-update)] as Socket
-    component [AdminRoutes\n(quantum metrics)] as Admin
-}
+' Simulated path (loopback): detections cross the peers' mux
+Loop ..> Loop : detections over mux 'quantum'
 
-' Physical layer flow
-PS --> QC : photon pulses
-QC --> SPD : surviving photons
-Eve ..> QC : intercept-resend\n(optional)
+' Optical path: quantum crosses the fiber daemon-to-daemon
+DaemonSrc --> Drivers : transmit / detections (WebSocket)
+Drivers <|-- AWG
+Drivers <|-- Tagger
+AWG --> Eve : pulse records
+Eve --> Tagger : emulated fiber\n(cleartext, loopback-confined)
+Tagger --> Recover : clicks (detector clock)
+Recover --> DaemonSrc : recovered detections
 
-' Protocol flow
-PLS --> Proto : detection events
-Sift --> QBER
-QBER --> Cascade
-Cascade --> PA
+' Classical reconciliation rides the authenticated DataChannel either way
+Sift --> Auth : frame-detections / bases / sample (authenticated)
+Distill --> Auth : parities / verify-hash / seed
+Rot --> Worker : setEncryptionKey(key, index)
 
-' Key generator
-Proto --> KG : BB84RoundResult
-KG --> Reg : register('BB84')
-KG --> Monitor : metrics callback
-KG --> AV : key bytes
-
-' Hardware path
-Bridge <|-- MATLAB
-HKG --> Bridge : get_raw_key_material()
-HKG --> KG : fallback
-
-' Server wiring
-AV --> Socket : qber event callback
-Monitor --> Admin : get_summary()
-Monitor --> Admin : get_history()
-
-' Qiskit validation
-Qiskit ..> Proto : validate protocol\ncorrectness
-
-note bottom of PLS
-  Models realistic optical chain:
-  • Poisson photon statistics (μ ≈ 0.1)
-  • Fiber attenuation (0.2 dB/km)
-  • Detector efficiency (10%)
-  • Dark counts, afterpulsing, jitter
+note bottom of Drivers
+  Everything ABOVE this line ships to
+  the real bench unchanged. Real optics
+  = concrete drivers here + fiber off.
+  See docs/HARDWARE.md.
 end note
 
-note bottom of Monitor
-  Classifies each round:
-  • NORMAL (QBER < 5%)
-  • WARNING (5-11%)
-  • INTRUSION (> 11%)
-  Triggers re-keying on intrusion
+note bottom of Engine
+  Continuous stream, not rounds:
+  • gate each frame at QBER 0.11
+  • pool accepted bits
+  • mint when pool ≥ key + leakage
+  • 3 consecutive failures ⇒ latch
 end note
 
 @enduml
