@@ -1426,3 +1426,105 @@ input {
   border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Trust & flow (UI PR 2) — SAS verification, verified badge, connection
+   banners, and a stalled-distillation state.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* Lobby copy */
+.lobby-hero {
+  text-align: center;
+  max-width: 460px;
+}
+.lobby-intro {
+  margin: 8px 0 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.lobby-invited {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.lobby-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* SAS verification */
+.sas-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.btn-verify {
+  font-family: var(--body-font);
+  font-size: 0.82rem;
+  font-weight: 600;
+  background: var(--success);
+  color: #ffffff;
+  border: 1px solid var(--success);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-verify:hover {
+  background: color-mix(in srgb, var(--success) 85%, #000);
+}
+.sas--verified {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border-default));
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+.sas--verified .sas-hint {
+  color: var(--success);
+  font-weight: 600;
+  opacity: 1;
+}
+.verified-badge {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+/* Connection / demo banners */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.banner--warn {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+.banner--info {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.banner-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  border-top-color: var(--warning);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Distillation stalled by a noisy channel (M3) */
+.qd-distill-fill--stalled {
+  background: var(--text-muted);
+  opacity: 0.6;
+}
