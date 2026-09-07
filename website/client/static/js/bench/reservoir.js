@@ -180,6 +180,11 @@ export class ReservoirEngine {
   constructor({ mux, makeClassicalChannel, frameSource, installKey, onState, slotsPerFrame }) {
     this._mux = mux;
     this._makeChannel = makeClassicalChannel;
+    // Built in start(), not here: the orchestrator finishes wiring the
+    // authenticated channel (ChannelAuth) between constructing the engine and
+    // calling start(), so building the control channel now would capture the
+    // unauthenticated fallback. See _ensureControl().
+    this._control = null;
     this._source = frameSource;
     this._installKey = installKey;
     this._onState = onState;
@@ -209,9 +214,26 @@ export class ReservoirEngine {
     }
   }
 
+  /**
+   * The AUTHENTICATED control channel (session-restart), built lazily once the
+   * orchestrator's ChannelAuth is in place. Without authentication a peer who
+   * had broken DTLS could inject a session-restart to churn sessions (a DoS).
+   * It is one-directional and low-volume (the source announces, the detector
+   * follows), so a lifetime monotonic MAC sequence stays in step. The 'quantum'
+   * detection channel deliberately stays raw: it is the per-frame hot path
+   * where a lifetime MAC sequence would desync on legitimate session churn, and
+   * hostile detections already fail the session cleanly via the sift
+   * bounds-checks. @private
+   */
+  _ensureControl() {
+    if (!this._control) this._control = this._makeChannel('control', undefined, 'control');
+    return this._control;
+  }
+
   /** Begin streaming. The source opens session 0; the detector joins it. */
   start() {
     if (this._destroyed) return;
+    this._ensureControl();
     this._listenForSessionRestarts();
     // Only the loopback detector receives detections over the mux (the source
     // peer computes and ships them). A daemon-backed detector gets its
@@ -259,7 +281,9 @@ export class ReservoirEngine {
         // The peer's session is long dead; announce the fresh one so its
         // listener rejoins (same advisory control path as failure restarts).
         const next = this._sessionN + 1;
-        this._mux.send('control', { type: 'session-restart', session: next });
+        this._ensureControl()
+          .send({ type: 'session-restart', session: next })
+          .catch(() => {});
         this._startSession(next);
       }
     }
@@ -276,11 +300,14 @@ export class ReservoirEngine {
   /* ── Sessions ─────────────────────────────────────────────────── */
 
   async _listenForSessionRestarts() {
-    const mux = this._mux;
     while (!this._destroyed) {
       let msg;
       try {
-        msg = await mux.receive('control');
+        // Authenticated receive: a forged or out-of-sequence restart raises a
+        // ChannelAuthError and ends the loop (bounded DoS, only reachable
+        // behind a broken DTLS layer). In normal operation restarts are
+        // well-formed and in-sequence, so this only exits on teardown.
+        msg = await this._control.receive();
       } catch {
         return;
       }
@@ -361,7 +388,9 @@ export class ReservoirEngine {
       this._restartTimer = setTimeout(() => {
         if (this._destroyed || this._exhausted) return;
         const next = this._sessionN + 1;
-        this._mux.send('control', { type: 'session-restart', session: next });
+        this._ensureControl()
+          .send({ type: 'session-restart', session: next })
+          .catch(() => {});
         this._startSession(next);
       }, sessionRestartDelayMs());
     }

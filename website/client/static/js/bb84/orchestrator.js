@@ -115,7 +115,8 @@ export class BB84Orchestrator {
 
     this._engine = new ReservoirEngine({
       mux: this._mux,
-      makeClassicalChannel: (domain, signal) => this._makeChannel(domain, signal),
+      makeClassicalChannel: (domain, signal, muxChannel) =>
+        this._makeChannel(domain, signal, muxChannel),
       frameSource,
       installKey: (key, keyIndex) => this._webrtc.setEncryptionKey(key, keyIndex),
       onState: (s) => this._onEngineState(s),
@@ -125,9 +126,12 @@ export class BB84Orchestrator {
     this._engine.start();
   }
 
-  /** @private authenticated (or plain) classical channel bound to a MAC domain. */
-  _makeChannel(domain, signal) {
-    const raw = new DataChannelClassicalChannel(this._mux, signal);
+  /** @private authenticated (or plain) classical channel bound to a MAC domain.
+   * `muxChannel` selects the underlying mux channel (default 'classical'); the
+   * engine passes 'control' so session-restart rides an authenticated envelope
+   * on its own transport rather than the shared 'classical' one. */
+  _makeChannel(domain, signal, muxChannel = 'classical') {
+    const raw = new DataChannelClassicalChannel(this._mux, signal, muxChannel);
     return this._auth ? new AuthenticatedClassicalChannel(raw, this._auth, domain) : raw;
   }
 

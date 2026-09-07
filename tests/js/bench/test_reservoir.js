@@ -56,8 +56,8 @@ function enginePair({ slotsPerFrame = 2048 } = {}) {
   ]) {
     engines[self] = new ReservoirEngine({
       mux: muxes[self],
-      makeClassicalChannel: (_domain, signal) =>
-        new DataChannelClassicalChannel(muxes[self], signal),
+      makeClassicalChannel: (_domain, signal, muxChannel) =>
+        new DataChannelClassicalChannel(muxes[self], signal, muxChannel),
       frameSource: fs,
       installKey: (key, keyIndex) => installed[self].push({ key, keyIndex }),
       onState: (s) => states[self].push(s),

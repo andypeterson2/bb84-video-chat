@@ -301,6 +301,28 @@ describe('Orchestrator auth integration', () => {
     }
   });
 
+  test('a forged session-restart on the control channel is rejected, not followed', async () => {
+    const p = await authPair();
+    try {
+      await p.untilMinted(1);
+      const before = p.installed.bob.length;
+      // A raw (unauthenticated) session-restart to a bogus far-future session:
+      // over the MAC'd control channel it fails verification and is dropped, so
+      // bob stays on the real session and keeps minting. Were it followed, bob
+      // would jump to session 999, desync from alice, and stop installing keys.
+      p.bob.handleMessage(
+        JSON.stringify({ ch: 'control', payload: { type: 'session-restart', session: 999 } }),
+      );
+      await p.waitFor(() => {
+        expect(p.installed.bob.length).toBeGreaterThan(before);
+      });
+      keysAgree(p);
+      expect(has(p.states.bob, (s) => s.phase === 'exhausted')).toBe(false);
+    } finally {
+      p.destroy();
+    }
+  });
+
   test('a latched call recovers when the eavesdropper is removed', async () => {
     const p = await authPair();
     try {

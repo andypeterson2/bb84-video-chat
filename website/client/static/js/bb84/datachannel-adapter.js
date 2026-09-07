@@ -233,23 +233,27 @@ export class DataChannelMux {
 }
 
 /**
- * ClassicalChannel adapter — wraps the mux's 'classical' channel.
+ * ClassicalChannel adapter — wraps one named mux channel as a send/receive
+ * transport. Defaults to 'classical'; the engine also binds it to 'control'
+ * so that channel can carry the {v,seq,payload,tag} authenticated envelope.
  */
 export class DataChannelClassicalChannel {
   /**
    * @param {DataChannelMux} mux
    * @param {AbortSignal} [signal] - per-round deadline/teardown signal
+   * @param {string} [channelName] - mux channel to bind to (default 'classical')
    */
-  constructor(mux, signal = undefined) {
+  constructor(mux, signal = undefined, channelName = 'classical') {
     this._mux = mux;
     this._signal = signal;
+    this._channelName = channelName;
   }
 
   async send(data) {
-    this._mux.send('classical', data);
+    this._mux.send(this._channelName, data);
   }
 
   async receive() {
-    return this._mux.receive('classical', { signal: this._signal });
+    return this._mux.receive(this._channelName, { signal: this._signal });
   }
 }
