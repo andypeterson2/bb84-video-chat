@@ -178,9 +178,24 @@ describe('cipher pill', () => {
   test('the reservoir dashboard shows QBER, keys, rotations and pool — no AES-GCM tile', () => {
     app.state.peerConnected = true;
     app.state.bb84Active = true;
+    app.state.dashboardExpanded = true;
     app.render();
     const labels = [...document.querySelectorAll('.qd-metric-label')].map((n) => n.textContent);
     expect(labels).toEqual(['QBER', 'Keys', 'Rotations', 'Pool']);
+  });
+
+  test('the dashboard is collapsed by default (video-first) and expands on toggle', () => {
+    app.state.peerConnected = true;
+    app.state.bb84Active = true;
+    app.state.dashboardExpanded = false;
+    app.render();
+    expect(document.querySelector('.qd-toggle')).not.toBeNull(); // compact summary row
+    expect(document.querySelector('.qd-body')).toBeNull(); // telemetry hidden
+    expect(document.querySelector('.qd-metric-label')).toBeNull();
+
+    app.state.dashboardExpanded = true;
+    app.render();
+    expect(document.querySelector('.qd-body')).not.toBeNull();
   });
 
   test('the mode badge reads SIMULATED until an optical backend negotiates', () => {
@@ -196,6 +211,7 @@ describe('cipher pill', () => {
   test('the distillation gauge fills toward the mint budget', () => {
     app.state.peerConnected = true;
     app.state.bb84Active = true;
+    app.state.dashboardExpanded = true;
     app.state.reservoirBits = 110;
     app.state.mintBudget = 220;
     app.render();

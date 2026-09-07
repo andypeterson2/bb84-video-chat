@@ -51,6 +51,7 @@ const state = {
   invited: false, // arrived via an invite link (a room token is in the URL)
   reconnecting: false, // ICE dropped mid-call; the transport is being restored
   peerEavesdropping: false, // the other peer is running the eavesdropper demo
+  dashboardExpanded: false, // the BB84 telemetry panel is expanded (video-first default)
 };
 
 const OPTICAL_STORAGE_KEY = 'qvc.optical';
@@ -656,6 +657,12 @@ async function handleJoinRoom(e) {
   webrtcManager.joinRoom(id);
 }
 
+/** Expand/collapse the BB84 telemetry so the video stays the anchor. */
+function toggleDashboard() {
+  state.dashboardExpanded = !state.dashboardExpanded;
+  render();
+}
+
 /** The user compared the SAS on camera and it MATCHES — mark the call verified. */
 function handleSasVerify() {
   state.sasVerified = true;
@@ -791,11 +798,6 @@ function setTheme(t) {
   document.documentElement.dataset.theme = t;
 }
 
-/** Red pill states — no security promise may render beside these. */
-function pillIsRed() {
-  return ['unencrypted', 'compromised', 'unsupported'].includes(state.cipherState);
-}
-
 /** Always-visible cipher pill — worker truth, not UI assumption. */
 function cipherPill() {
   const views = {
@@ -831,11 +833,12 @@ function render() {
         <div class="status"><span class="dot ${state.signalingConnected ? 'dot--ok' : 'dot--off'}"></span>${state.signalingConnected ? 'Connected' : 'Offline'}</div>
       </div>
       <div class="lobby">
+        <div class="lobby-card">
         <div class="lobby-hero">
           <h2 class="lobby-title">Quantum-secured video</h2>
           <p class="lobby-intro">A peer-to-peer call whose encryption keys come from BB84 quantum key distribution. Start a session and share the link, or paste an invite to join.</p>
         </div>
-        <div class="preview"><video id="local-video" class="preview-video" autoplay muted playsinline></video></div>
+        <div class="preview"><video id="local-video" class="preview-video" autoplay muted playsinline></video><span class="video-label">You</span></div>
         <div class="lobby-actions">
           ${
             state.joining
@@ -876,6 +879,7 @@ function render() {
           <button class="media-btn ${state.cameraOn ? '' : 'media-btn--off'}" onclick="toggleCamera()">${state.cameraOn ? ICONS.cameraOn : ICONS.cameraOff}</button>
           <button class="media-btn ${state.muted ? 'media-btn--off' : ''}" onclick="toggleMute()">${state.muted ? ICONS.micOff : ICONS.micOn}</button>
         </div>
+        </div>
       </div>
       <div id="toast" class="toast"></div>`;
     // Token and link go through value/textContent sinks, never innerHTML.
@@ -906,6 +910,7 @@ function render() {
     app.innerHTML = `
       <div class="incall">
         <div class="video-area">
+          ${remoteStream ? '<span class="video-label">Partner</span>' : `<div class="video-placeholder">Waiting for your partner’s camera…</div>`}
           <video id="remote-video" class="remote-video" autoplay playsinline></video>
           <video id="local-video" class="pip-video" autoplay muted playsinline></video>
         </div>
@@ -939,11 +944,16 @@ function render() {
           ${
             state.bb84Active
               ? `
-            <div class="qd-header">
+            <button class="qd-toggle" onclick="toggleDashboard()" aria-expanded="${state.dashboardExpanded}">
               <span class="qd-title" title="BB84 — the quantum key-distribution protocol that generates this call's encryption keys.">BB84 Key Reservoir</span>
               <span class="qd-mode qd-mode--${state.mode || 'pending'}" title="Whether keys come from a real optical bench or the in-browser simulator.">${modeBadge()}</span>
               <span class="qd-badge qd-status--${qberStatus()}" title="Quantum channel noise. This is a link-quality readout, not the encryption status — that's the pill above.">${qberStatusLabel()}</span>
-            </div>
+              <span class="qd-summary">${state.keysMinted} ${state.keysMinted === 1 ? 'key' : 'keys'}</span>
+              <span class="qd-chevron">${state.dashboardExpanded ? '▾' : '▸'}</span>
+            </button>
+            ${
+              state.dashboardExpanded
+                ? `<div class="qd-body">
             <div class="qd-distill">
               <div class="qd-distill-bar"><span class="qd-distill-fill ${state.qber !== null && state.qber > QBER_THRESHOLD ? 'qd-distill-fill--stalled' : ''}" style="width:${(distillFraction() * 100).toFixed(0)}%"></span></div>
               <span class="qd-distill-label" title="Sifted bits accumulated toward the next key; a noisy channel discards frames and slows this.">Distilling next key — ${state.reservoirBits.toLocaleString()}${state.mintBudget ? ` / ${state.mintBudget.toLocaleString()}` : ''} sifted bits</span>
@@ -955,7 +965,10 @@ function render() {
               <div class="qd-metric" title="Keys buffered and ready to rotate in."><span class="qd-metric-value">${state.poolDepth}</span><span class="qd-metric-label">Pool</span></div>
             </div>
             <canvas id="qd-chart" class="qd-chart"></canvas>
-            ${state.isInitiator ? `<button class="qd-eve-btn ${state.eavesdropper ? 'qd-eve-btn--active' : ''}" onclick="toggleEavesdropper()">${state.eavesdropper ? 'Eavesdropper active — click to remove' : 'Simulate eavesdropper'}</button>` : ''}`
+            ${state.isInitiator ? `<button class="qd-eve-btn ${state.eavesdropper ? 'qd-eve-btn--active' : ''}" onclick="toggleEavesdropper()">${state.eavesdropper ? 'Eavesdropper active — click to remove' : 'Simulate eavesdropper'}</button>` : ''}
+          </div>`
+                : ''
+            }`
               : '<div class="qd-inactive">Establishing quantum channel…</div>'
           }
         </div>
@@ -1005,6 +1018,7 @@ window.toggleCamera = toggleCamera;
 window.toggleMute = toggleMute;
 window.toggleEavesdropper = toggleEavesdropper;
 window.copyJoinLink = copyJoinLink;
+window.toggleDashboard = toggleDashboard;
 window.handleSasVerify = handleSasVerify;
 window.handleSasMismatch = handleSasMismatch;
 window.toggleOptical = toggleOptical;

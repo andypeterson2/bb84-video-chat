@@ -56,6 +56,7 @@
   --card-bg: #f7f4ec;
   --toast-bg: #182b49;
   --toast-fg: #ffffff;
+  --shadow: 0 1px 2px rgba(24, 43, 73, 0.06), 0 12px 30px rgba(24, 43, 73, 0.08);
 }
 
 /* ── Dark theme (navy ground) ───────────────────────────────────────────── */
@@ -87,6 +88,7 @@
   --card-bg: #14263c;
   --toast-bg: #1c3350;
   --toast-fg: #e6ebf2;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 34px rgba(0, 0, 0, 0.4);
 }
 
 /* ── Reset ──────────────────────────────────────────────────────────────── */
@@ -184,87 +186,6 @@ input {
   gap: 10px;
 }
 
-.header-theme-btn {
-  background: none;
-  border: 1px solid var(--border-subtle);
-  color: var(--off-white);
-  cursor: pointer;
-  opacity: 0.7;
-  line-height: 1;
-  padding: 5px 8px;
-  border-radius: var(--radius);
-  transition:
-    opacity 0.15s,
-    background 0.15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.header-theme-btn:hover {
-  opacity: 1;
-  background: var(--btn-bg);
-}
-
-.conn-status {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.7rem;
-  opacity: 0.75;
-  letter-spacing: 0.03em;
-  color: var(--off-white);
-}
-
-.conn-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-  flex-shrink: 0;
-}
-.conn-dot--ok {
-  background: var(--success);
-}
-.conn-dot--idle {
-  background: var(--accent);
-}
-.conn-dot--off {
-  background: var(--error);
-}
-
-.conn-label {
-  text-transform: uppercase;
-  font-size: 0.65rem;
-  opacity: 0.8;
-}
-.conn-sep {
-  opacity: 0.4;
-  margin: 0 2px;
-}
-
-.conn-state {
-  text-transform: uppercase;
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  padding: 1px 6px;
-  border-radius: var(--radius);
-}
-.conn-state--idle {
-  color: var(--off-white);
-  opacity: 0.5;
-}
-.conn-state--ready {
-  color: var(--success);
-}
-.conn-state--waiting {
-  color: var(--accent);
-}
-.conn-state--in-session {
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 14%, transparent);
-}
-
 /* ── Toast ──────────────────────────────────────────────────────────────── */
 .toast {
   position: fixed;
@@ -322,46 +243,40 @@ input {
 }
 
 /* ── Lobby ──────────────────────────────────────────────────────────────── */
+/* Centering canvas; the actual content sits in a composed .lobby-card so the
+   lobby reads as an intentional panel rather than a small floating form. */
 .lobby {
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  height: 100%;
   width: 100%;
   padding: 24px;
-  max-width: 480px;
-  margin: 0 auto;
+  overflow-y: auto;
 }
-
-.lobby-preview {
-  position: relative;
-  width: 100%;
-  max-width: 400px;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
-}
-.lobby-preview-canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-  background: var(--bg-overlay);
-}
-.lobby-preview-placeholder {
-  position: absolute;
-  inset: 0;
+.lobby-card {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  color: var(--off-white);
-  opacity: 0.15;
+  gap: 18px;
+  width: 100%;
+  max-width: 520px;
+  padding: 34px 36px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
 }
-.lobby-preview .noise-canvas-wrapper {
-  position: absolute;
-  inset: 0;
+@media (max-width: 560px) {
+  .lobby {
+    padding: 12px;
+  }
+  .lobby-card {
+    padding: 22px 18px;
+    gap: 14px;
+    border-radius: 12px;
+  }
 }
 
 .lobby-title {
@@ -370,128 +285,6 @@ input {
   color: var(--off-white);
   margin: 0;
   letter-spacing: -0.01em;
-}
-
-.lobby-form {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-
-.lobby-label {
-  font-size: 0.8rem;
-  color: var(--off-white);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.6;
-  min-width: 50px;
-  flex-shrink: 0;
-}
-
-.lobby-server-inputs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 1;
-}
-
-.lobby-input {
-  height: 36px;
-  background: var(--input-bg);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  color: var(--off-white);
-  font-size: 0.85rem;
-  padding: 0 10px;
-  outline: none;
-  transition: border-color 0.15s;
-}
-.lobby-input:focus {
-  border-color: var(--border-focus);
-}
-.lobby-input:disabled {
-  opacity: 0.4;
-}
-.lobby-input--host {
-  flex: 1;
-}
-.lobby-input--port {
-  width: 72px;
-}
-.lobby-input--room {
-  flex: 1;
-  text-transform: uppercase;
-}
-
-.lobby-colon {
-  color: var(--off-white);
-  opacity: 0.4;
-  font-size: 1rem;
-}
-.lobby-divider {
-  width: 60%;
-  height: 1px;
-  background: var(--border-subtle);
-}
-
-.lobby-btn {
-  height: 36px;
-  padding: 0 16px;
-  font-size: 0.85rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--border-subtle);
-  cursor: pointer;
-  background: var(--btn-bg);
-  color: var(--off-white);
-  transition:
-    background 0.15s,
-    opacity 0.15s;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-}
-.lobby-btn:hover:not(:disabled) {
-  background: var(--btn-bg-hover);
-}
-.lobby-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.lobby-connect-btn--connecting {
-  opacity: 0.5;
-  cursor: default;
-}
-.lobby-connect-btn--connected {
-  background: color-mix(in srgb, var(--success) 18%, transparent);
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 40%, transparent);
-  cursor: default;
-}
-
-/* Primary action — solid UC San Diego blue, white label. */
-.lobby-start-btn {
-  width: 100%;
-  height: 44px;
-  font-size: 0.95rem;
-  font-weight: 600;
-  justify-content: center;
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-.lobby-start-btn:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-}
-
-.lobby-error {
-  color: var(--bad);
-  font-size: 0.8rem;
-  text-align: center;
 }
 
 .lobby-waiting {
@@ -512,78 +305,6 @@ input {
   animation: spin 0.8s linear infinite;
 }
 
-.lobby-user-id {
-  opacity: 0.7;
-  font-size: 0.8rem;
-  color: var(--off-white);
-}
-
-.lobby-media {
-  display: flex;
-  gap: 12px;
-  margin-top: 4px;
-}
-
-.lobby-media-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border-subtle);
-  background: var(--btn-bg);
-  color: var(--off-white);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background 0.15s,
-    border-color 0.15s;
-}
-.lobby-media-btn:hover {
-  background: var(--btn-bg-hover);
-}
-.lobby-media-btn--off {
-  background: color-mix(in srgb, var(--error) 12%, transparent);
-  border-color: color-mix(in srgb, var(--error) 40%, transparent);
-  color: var(--error);
-}
-.lobby-media-btn--off:hover {
-  background: color-mix(in srgb, var(--error) 20%, transparent);
-}
-
-.lobby-device-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-
-.lobby-select {
-  flex: 1;
-  height: 36px;
-  background: var(--input-bg);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  color: var(--off-white);
-  font-size: 0.85rem;
-  padding: 0 10px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.15s;
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235c6675' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  padding-right: 28px;
-}
-.lobby-select:focus {
-  border-color: var(--border-focus);
-}
-.lobby-select option {
-  background: var(--bg-surface);
-  color: var(--off-white);
-}
 
 /* ── InCall ─────────────────────────────────────────────────────────────── */
 .incall {
@@ -592,190 +313,6 @@ input {
   height: 100%;
   width: 100%;
   background: var(--bg-base);
-}
-
-.incall-video-area {
-  flex: 1;
-  position: relative;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--bg-overlay);
-}
-
-.incall-peer-canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-  position: relative;
-  z-index: 2;
-}
-.incall-peer-noise {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-}
-
-.incall-pip {
-  position: absolute;
-  bottom: 16px;
-  right: 16px;
-  width: 180px;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  border: 1px solid var(--border-default);
-  background: var(--bg-overlay);
-  z-index: 10;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-}
-.incall-pip-canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-.incall-pip-off {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-surface);
-  color: var(--text-muted);
-}
-
-.incall-info {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 24px;
-  padding: 6px 16px;
-  background: var(--card-bg);
-  border-top: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-.incall-room {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  letter-spacing: 0.05em;
-}
-.incall-room strong {
-  color: var(--text-primary);
-  letter-spacing: 0.08em;
-}
-.incall-timer {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.incall-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 24px;
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-  position: relative;
-}
-.incall-toolbar-center {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.incall-tool-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 8px 16px;
-  background: var(--btn-bg);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.incall-tool-btn:hover {
-  background: var(--btn-bg-hover);
-}
-.incall-tool-btn--off {
-  background: color-mix(in srgb, var(--error) 12%, transparent);
-  color: var(--error);
-  border-color: color-mix(in srgb, var(--error) 40%, transparent);
-}
-.incall-tool-btn--off:hover {
-  background: color-mix(in srgb, var(--error) 20%, transparent);
-}
-
-.incall-tool-label {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.incall-leave-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 8px 20px;
-  background: var(--error);
-  border: 1px solid var(--error);
-  border-radius: var(--radius);
-  color: #ffffff;
-  cursor: pointer;
-  transition: background 0.15s;
-  position: absolute;
-  right: 24px;
-}
-.incall-leave-btn:hover {
-  background: color-mix(in srgb, var(--error) 82%, #000);
-}
-
-/* ── Noise canvas ───────────────────────────────────────────────────────── */
-.noise-canvas-wrapper {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  background-color: var(--bg-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.noise-canvas {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  image-rendering: pixelated;
-  opacity: 0.75;
-}
-.noise-label {
-  position: absolute;
-  color: var(--text-primary);
-  font-size: clamp(10px, 2vw, 18px);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  pointer-events: none;
-  text-shadow: 0 0 8px rgba(0, 0, 0, 0.9);
-  background: rgba(0, 0, 0, 0.35);
-  padding: 4px 10px;
-}
-
-/* ── Status popup ───────────────────────────────────────────────────────── */
-.status-popup {
-  position: fixed;
-  z-index: 1000;
-  transform: translate(-50%, -50%);
-  top: 50%;
-  left: 50%;
-  padding: 7px;
-  background-color: var(--bad);
-  border: 1px solid var(--border-default);
-  font-size: min(7vh, 4vw);
-  color: var(--bg-base);
-  text-align: center;
 }
 
 /* ── Quantum Dashboard Panel ────────────────────────────────────────────── */
@@ -1189,8 +726,7 @@ input {
 /* ═══════════════════════════════════════════════════════════════════════════
    Live components — institutional styles for the classes render() actually
    emits (.btn, .dot, .preview, .video-area, .call-info, .toolbar, .media-btn…).
-   The older .lobby-* / .incall-* / .conn-* rules above are unused by the
-   current render() and are dead; these are what the app shows today.
+   These are what the app shows today.
    ═════════════════════════════════════════════════════════════════════════ */
 
 /* Header title */
@@ -1231,7 +767,6 @@ input {
   flex-direction: column;
   gap: 12px;
   width: 100%;
-  max-width: 380px;
 }
 .form-error {
   font-size: 0.8rem;
@@ -1241,8 +776,8 @@ input {
 
 /* Self-preview */
 .preview {
+  position: relative;
   width: 100%;
-  max-width: 380px;
   aspect-ratio: 16 / 9;
   border-radius: var(--radius);
   overflow: hidden;
@@ -1255,6 +790,33 @@ input {
   object-fit: cover;
   display: block;
   transform: scaleX(-1); /* mirror the self-view */
+}
+/* Corner label on the self-preview and the remote video (M1). */
+.video-label {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 3;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(13, 24, 38, 0.72);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+/* "Waiting for your partner's camera" placeholder while no remote stream. */
+.video-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.95rem;
 }
 
 /* Buttons */
@@ -1527,4 +1089,40 @@ input {
 .qd-distill-fill--stalled {
   background: var(--text-muted);
   opacity: 0.6;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Layout rebalance (UI PR 3) — collapsible BB84 dashboard so the video is the
+   anchor and the telemetry is a compact strip that expands on demand.
+   ═════════════════════════════════════════════════════════════════════════ */
+.qd-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  margin: 0;
+  cursor: pointer;
+  font-family: var(--body-font);
+  color: var(--off-white);
+  text-align: left;
+}
+.qd-toggle .qd-mode {
+  margin-left: 0;
+}
+.qd-summary {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.qd-chevron {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.qd-body {
+  padding-top: 10px;
 }
