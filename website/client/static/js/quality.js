@@ -1,19 +1,23 @@
 /**
  * QualityController — adaptive video quality based on network conditions.
  *
- * Polls RTCPeerConnection.getStats() to measure bandwidth and RTT,
- * selects a quality tier, and applies constraints to the local video track.
+ * Polls RTCPeerConnection.getStats() and drives adaptation off the browser's
+ * OWN bandwidth estimate (`availableOutgoingBitrate`, the GCC/TWCC output) when
+ * present — don't rebuild BWE, cooperate with it. It selects a quality tier,
+ * caps the encoder via the video sender's `maxBitrate`, and applies capture
+ * constraints to the local track. Falls back to a bytesSent-delta estimate when
+ * `availableOutgoingBitrate` is unavailable.
  */
 
 const POLL_INTERVAL_MS = 2000;
 const HYSTERESIS_COUNT = 3;
 
 const TIERS = [
-  { label: 'HD', minKbps: 2500, width: 1280, height: 720, fps: 30 },
-  { label: 'SD', minKbps: 1000, width: 640, height: 480, fps: 30 },
-  { label: 'SD Low', minKbps: 500, width: 640, height: 480, fps: 15 },
-  { label: 'Low', minKbps: 200, width: 320, height: 240, fps: 15 },
-  { label: 'Min', minKbps: 0, width: 320, height: 240, fps: 10 },
+  { label: 'HD', minKbps: 2500, targetKbps: 2500, width: 1280, height: 720, fps: 30 },
+  { label: 'SD', minKbps: 1000, targetKbps: 1200, width: 640, height: 480, fps: 30 },
+  { label: 'SD Low', minKbps: 500, targetKbps: 700, width: 640, height: 480, fps: 15 },
+  { label: 'Low', minKbps: 200, targetKbps: 400, width: 320, height: 240, fps: 15 },
+  { label: 'Min', minKbps: 0, targetKbps: 250, width: 320, height: 240, fps: 10 },
 ];
 
 export class QualityController {
@@ -21,11 +25,13 @@ export class QualityController {
    * @param {object} options
    * @param {RTCPeerConnection} options.pc
    * @param {MediaStream} options.localStream
+   * @param {RTCRtpSender} [options.sender] - video sender, for maxBitrate control
    * @param {function(object): void} options.onUpdate
    */
-  constructor({ pc, localStream, onUpdate }) {
+  constructor({ pc, localStream, sender, onUpdate }) {
     this._pc = pc;
     this._localStream = localStream;
+    this._sender = sender || null;
     this._onUpdate = onUpdate;
     this._intervalId = null;
     this._prevBytesSent = null;
@@ -64,6 +70,7 @@ export class QualityController {
     let rttMs = null;
     let outboundVideo = null;
     let inboundVideo = null;
+    let availableKbps = null;
 
     stats.forEach((report) => {
       if (report.type === 'candidate-pair' && report.nominated) {
@@ -71,6 +78,10 @@ export class QualityController {
           report.currentRoundTripTime != null
             ? Math.round(report.currentRoundTripTime * 1000)
             : null;
+        // The browser's own send-side estimate (GCC/TWCC), in bits/s.
+        if (report.availableOutgoingBitrate != null) {
+          availableKbps = Math.round(report.availableOutgoingBitrate / 1000);
+        }
       }
       if (report.type === 'outbound-rtp' && report.kind === 'video') {
         outboundVideo = report;
@@ -80,10 +91,11 @@ export class QualityController {
       }
     });
 
-    // Calculate outbound bandwidth
-    let bandwidthKbps = null;
+    // Prefer the browser's own bandwidth estimate; fall back to a send-rate
+    // delta only when availableOutgoingBitrate isn't exposed.
+    let bandwidthKbps = availableKbps;
     const now = performance.now();
-    if (outboundVideo && this._prevBytesSent != null) {
+    if (bandwidthKbps == null && outboundVideo && this._prevBytesSent != null) {
       const deltaBytes = outboundVideo.bytesSent - this._prevBytesSent;
       const deltaSec = (now - this._prevTimestamp) / 1000;
       if (deltaSec > 0) {
@@ -106,6 +118,7 @@ export class QualityController {
             this._pendingTier = null;
             this._pendingCount = 0;
             this._applyConstraints();
+            this._applyBitrate();
           }
         } else {
           this._pendingTier = idealTier;
@@ -124,6 +137,8 @@ export class QualityController {
     const inFps = inboundVideo?.framesPerSecond ?? null;
     const inWidth = inboundVideo?.frameWidth ?? null;
     const inHeight = inboundVideo?.frameHeight ?? null;
+    // Why the browser is holding quality back: 'bandwidth' | 'cpu' | 'none'.
+    const limitedBy = outboundVideo?.qualityLimitationReason ?? null;
 
     this._onUpdate({
       rttMs,
@@ -135,7 +150,21 @@ export class QualityController {
       actualRes: actualWidth && actualHeight ? actualWidth + 'x' + actualHeight : null,
       inFps,
       inRes: inWidth && inHeight ? inWidth + 'x' + inHeight : null,
+      limitedBy,
     });
+  }
+
+  /** Cap the encoder at the current tier's target bitrate. @private */
+  _applyBitrate() {
+    if (!this._sender) return;
+    try {
+      const params = this._sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      params.encodings[0].maxBitrate = this._currentTier.targetKbps * 1000;
+      this._sender.setParameters(params).catch(() => {});
+    } catch {
+      /* sender params not settable here — resolution ladder still applies */
+    }
   }
 
   _applyConstraints() {

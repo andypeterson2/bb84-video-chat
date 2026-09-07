@@ -226,6 +226,25 @@ class TestSignalingFlow:
         offers = events_of(env["captured"], "offer")
         assert len(offers) == 0
 
+    def test_request_ice_restart_relayed_to_peer(self, env):
+        p1 = env["make_peer"]("sid1")
+        p2 = env["make_peer"]("sid2")
+        p1.emit_event("create_room")
+        room_id = env["rooms"].get_peer("sid1").room_id
+        p2.emit_event("join_room", {"room_id": room_id})
+        env["captured"].clear()
+
+        p2.emit_event("request_ice_restart")
+        relayed = events_of(env["captured"], "request-ice-restart")
+        assert len(relayed) == 1
+        assert relayed[0]["room"] == "sid1"  # nudge goes to the initiator (peer)
+
+    def test_request_ice_restart_without_room_is_silent(self, env):
+        p1 = env["make_peer"]("sid1")
+        env["captured"].clear()
+        p1.emit_event("request_ice_restart")
+        assert len(events_of(env["captured"], "request-ice-restart")) == 0
+
     @pytest.mark.parametrize("event", ["offer", "answer", "ice_candidate"])
     @pytest.mark.parametrize("payload", [["not", "a", "dict"], "string", 42])
     def test_relay_handlers_ignore_non_dict_payloads(self, env, event, payload):

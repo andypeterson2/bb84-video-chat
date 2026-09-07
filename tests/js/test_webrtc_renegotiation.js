@@ -77,3 +77,56 @@ test('a second offer is ignored: no rebuilt connection, an error is surfaced', a
   expect(errors.some((e) => /renegotiation/.test(e.message))).toBe(true);
   warn.mockRestore();
 });
+
+test('a flagged ICE-restart offer is applied to the EXISTING connection (key preserved)', async () => {
+  const socket = new FakeSocket();
+  const manager = new WebRTCManager(socket, { enableEncryption: false });
+  const errors = [];
+  manager.on('error', (d) => errors.push(d));
+
+  await socket.fire('offer', { sdp: { type: 'offer', sdp: 'first' } });
+  const first = FakePeerConnection.instances[0];
+
+  // The one legitimate mid-call offer: an ICE restart. Applied in place — the
+  // same pc, senders, transform and keyed worker are reused (no rebuild).
+  await socket.fire('offer', { iceRestart: true, sdp: { type: 'offer', sdp: 'restart' } });
+  expect(FakePeerConnection.instances).toHaveLength(1);
+  expect(first.remoteDescriptions.map((d) => d.sdp)).toEqual(['first', 'restart']);
+  expect(socket.emitted.filter((e) => e.event === 'answer')).toHaveLength(2);
+  expect(errors).toHaveLength(0);
+});
+
+test('the initiator restarts ICE on a failed connection, reusing the same pc', async () => {
+  const socket = new FakeSocket();
+  const manager = new WebRTCManager(socket, { enableEncryption: false });
+  const errors = [];
+  manager.on('error', (d) => errors.push(d));
+
+  await socket.fire('room-joined', { room_id: 'r', initiator: true });
+  const pc = FakePeerConnection.instances[0];
+  expect(socket.emitted.filter((e) => e.event === 'offer')).toHaveLength(1);
+
+  pc.iceConnectionState = 'failed';
+  pc.oniceconnectionstatechange();
+  await vi.waitFor(() => expect(socket.emitted.filter((e) => e.event === 'offer')).toHaveLength(2));
+
+  const offers = socket.emitted.filter((e) => e.event === 'offer');
+  expect(offers[1].data.iceRestart).toBe(true);
+  expect(FakePeerConnection.instances).toHaveLength(1); // reused, not rebuilt
+  expect(errors).toHaveLength(0);
+});
+
+test('the answerer asks the initiator to restart ICE on a failed connection', async () => {
+  const socket = new FakeSocket();
+  const manager = new WebRTCManager(socket, { enableEncryption: false });
+  manager.on('error', () => {});
+
+  await socket.fire('offer', { sdp: { type: 'offer', sdp: 'first' } });
+  const pc = FakePeerConnection.instances[0];
+
+  pc.iceConnectionState = 'failed';
+  pc.oniceconnectionstatechange();
+
+  expect(socket.emitted.some((e) => e.event === 'request_ice_restart')).toBe(true);
+  expect(socket.emitted.some((e) => e.event === 'offer')).toBe(false); // answerer never offers
+});

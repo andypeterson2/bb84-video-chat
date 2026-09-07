@@ -44,6 +44,7 @@ const state = {
   // optical mode to engage, otherwise both fall back to the simulator.
   optical: { enabled: false, url: 'ws://127.0.0.1:8781', token: '' },
   opticalStatus: '', // transient connect feedback shown in the settings row
+  quality: null, // adaptive-quality telemetry {tier, bandwidthKbps, rttMs, limitedBy, ...}
   errorMessage: '',
 };
 
@@ -72,6 +73,8 @@ let localStream = null;
 let remoteStream = null;
 let bb84 = null;
 let benchConnection = null; // live DaemonConnection while optical mode is armed
+let qualityController = null; // adaptive bitrate/resolution while a call is up
+let QualityControllerCls = null; // resolved from the dynamic import
 
 /* ── Icons ──────────────────────────────────────────────────────── */
 const ICONS = {
@@ -126,102 +129,106 @@ function connectToSignaling(url) {
   });
   socket.on('welcome', () => render());
 
-  Promise.all([import('./js/webrtc.js'), import('./js/bb84/orchestrator.js')]).then(
-    async ([{ WebRTCManager }, { BB84Orchestrator }]) => {
-      // ICE servers (STUN + short-lived TURN) come from the signaling backend so
-      // relay credentials stay short-lived and no long-lived secret ships to the
-      // client. Fetched before the manager so the first PeerConnection has them.
-      const iceServers = await fetchIceServers(url);
-      // Attach the Insertable Streams transforms up front. The crypto worker is
-      // FAIL-CLOSED: it drops every frame until BB84 delivers a key, then encrypts
-      // with no renegotiation. (Constructing with `false` never created the worker
-      // at all, so a derived key had nowhere to go — encryption never engaged.)
-      webrtcManager = new WebRTCManager(socket, { enableEncryption: true, iceServers });
+  Promise.all([
+    import('./js/webrtc.js'),
+    import('./js/bb84/orchestrator.js'),
+    import('./js/quality.js'),
+  ]).then(async ([{ WebRTCManager }, { BB84Orchestrator }, { QualityController }]) => {
+    QualityControllerCls = QualityController;
+    // ICE servers (STUN + short-lived TURN) come from the signaling backend so
+    // relay credentials stay short-lived and no long-lived secret ships to the
+    // client. Fetched before the manager so the first PeerConnection has them.
+    const iceServers = await fetchIceServers(url);
+    // Attach the Insertable Streams transforms up front. The crypto worker is
+    // FAIL-CLOSED: it drops every frame until BB84 delivers a key, then encrypts
+    // with no renegotiation. (Constructing with `false` never created the worker
+    // at all, so a derived key had nowhere to go — encryption never engaged.)
+    webrtcManager = new WebRTCManager(socket, { enableEncryption: true, iceServers });
 
-      bb84 = new BB84Orchestrator({
-        webrtcManager,
-        onStateChange: handleBB84State,
-      });
+    bb84 = new BB84Orchestrator({
+      webrtcManager,
+      onStateChange: handleBB84State,
+    });
 
-      webrtcManager.on('room-created', (d) => {
-        state.roomId = d.room_id;
-        // The room id is an unguessable capability token: the invite link IS
-        // the credential. It travels in the fragment so it never reaches
-        // server logs or Referer headers.
-        state.joinLink = `${window.location.origin}${window.location.pathname}#room=${encodeURIComponent(d.room_id)}`;
-        state.waitingForPeer = true;
+    webrtcManager.on('room-created', (d) => {
+      state.roomId = d.room_id;
+      // The room id is an unguessable capability token: the invite link IS
+      // the credential. It travels in the fragment so it never reaches
+      // server logs or Referer headers.
+      state.joinLink = `${window.location.origin}${window.location.pathname}#room=${encodeURIComponent(d.room_id)}`;
+      state.waitingForPeer = true;
+      render();
+    });
+    webrtcManager.on('room-joined', async (d) => {
+      state.roomId = d.room_id || state.roomId;
+      state.waitingForPeer = false;
+      if (!localStream) {
+        localStream = await webrtcManager.getLocalMedia();
+        showLocalVideo(localStream);
+      }
+    });
+    webrtcManager.on('remote-stream', (d) => {
+      state.peerConnected = true;
+      state.elapsed = 0;
+      startTimer();
+      showRemoteVideo(d.stream);
+      startQualityController();
+      render();
+    });
+    webrtcManager.on('data-channel-open', () => {
+      state.bb84Active = true;
+      render();
+      // The optical bench (if any) was already paired at create/join time,
+      // OFF this handshake path — a variable-latency pairing here would let
+      // the peer's early fingerprint messages arrive before init() built the
+      // mux, and they would be dropped. init() must run promptly so both
+      // sides' muxes exist before either sends. init() starts continuous
+      // streaming itself; a rejection means the secure-channel bootstrap
+      // failed before any streaming, so surface it loudly.
+      bb84.init({ roomToken: state.roomId, isInitiator: state.isInitiator }).catch(() => {
+        state.cipherState = 'compromised';
+        showToast('Secure-channel setup failed — no key will be established.');
         render();
       });
-      webrtcManager.on('room-joined', async (d) => {
-        state.roomId = d.room_id || state.roomId;
-        state.waitingForPeer = false;
-        if (!localStream) {
-          localStream = await webrtcManager.getLocalMedia();
-          showLocalVideo(localStream);
-        }
-      });
-      webrtcManager.on('remote-stream', (d) => {
-        state.peerConnected = true;
-        state.elapsed = 0;
-        startTimer();
-        showRemoteVideo(d.stream);
-        render();
-      });
-      webrtcManager.on('data-channel-open', () => {
-        state.bb84Active = true;
-        render();
-        // The optical bench (if any) was already paired at create/join time,
-        // OFF this handshake path — a variable-latency pairing here would let
-        // the peer's early fingerprint messages arrive before init() built the
-        // mux, and they would be dropped. init() must run promptly so both
-        // sides' muxes exist before either sends. init() starts continuous
-        // streaming itself; a rejection means the secure-channel bootstrap
-        // failed before any streaming, so surface it loudly.
-        bb84.init({ roomToken: state.roomId, isInitiator: state.isInitiator }).catch(() => {
-          state.cipherState = 'compromised';
-          showToast('Secure-channel setup failed — no key will be established.');
-          render();
-        });
-      });
-      webrtcManager.on('data-channel-message', (d) => bb84.handleMessage(d));
-      webrtcManager.on('peer-disconnected', () => {
-        resetSession();
-        render();
-        showToast('Peer disconnected.');
-      });
-      webrtcManager.on('error', (d) => showToast(d.message || 'Error'));
-      webrtcManager.on('state-change', (d) => {
-        state.peerConnected = d.state === 'connected';
-        render();
-      });
-      webrtcManager.on('cipher-state', (msg) => {
-        if (msg.state === 'encrypting') {
-          state.cipherState = 'encrypted';
-          state.keyIndex = msg.keyIndex;
-        } else if (msg.state === 'worker-error') {
-          state.cipherState = 'unencrypted';
-          showToast('Encryption worker failed — media is blocked, not sent in the clear.');
-        } else if (msg.state === 'unsupported') {
-          // This browser has no RTCRtpScriptTransform: frames CANNOT be
-          // encrypted, and pretending otherwise is exactly the lie the
-          // fail-closed design exists to prevent.
-          state.cipherState = 'unsupported';
-          showToast('This browser cannot encrypt media frames — no key will be used.');
-        } else if (msg.state === 'keyless') {
-          // The worker is dropping frames. Before the first key that is the
-          // normal establishing window; after one it means the keyed worker
-          // was replaced — a downgrade, shown loudly.
-          state.cipherState = hasBeenEncrypted() ? 'unencrypted' : 'establishing';
-        }
-        render();
-      });
-      // Aggregated by the worker (at most one message per second). A burst of
-      // failures during a re-key is normal; a sustained stream is not.
-      webrtcManager.on('decrypt-error', (msg) => {
-        console.warn(`Frame decrypt failures in the last interval: ${msg.failures ?? 1}`);
-      });
-    },
-  );
+    });
+    webrtcManager.on('data-channel-message', (d) => bb84.handleMessage(d));
+    webrtcManager.on('peer-disconnected', () => {
+      resetSession();
+      render();
+      showToast('Peer disconnected.');
+    });
+    webrtcManager.on('error', (d) => showToast(d.message || 'Error'));
+    webrtcManager.on('state-change', (d) => {
+      state.peerConnected = d.state === 'connected';
+      render();
+    });
+    webrtcManager.on('cipher-state', (msg) => {
+      if (msg.state === 'encrypting') {
+        state.cipherState = 'encrypted';
+        state.keyIndex = msg.keyIndex;
+      } else if (msg.state === 'worker-error') {
+        state.cipherState = 'unencrypted';
+        showToast('Encryption worker failed — media is blocked, not sent in the clear.');
+      } else if (msg.state === 'unsupported') {
+        // This browser has no RTCRtpScriptTransform: frames CANNOT be
+        // encrypted, and pretending otherwise is exactly the lie the
+        // fail-closed design exists to prevent.
+        state.cipherState = 'unsupported';
+        showToast('This browser cannot encrypt media frames — no key will be used.');
+      } else if (msg.state === 'keyless') {
+        // The worker is dropping frames. Before the first key that is the
+        // normal establishing window; after one it means the keyed worker
+        // was replaced — a downgrade, shown loudly.
+        state.cipherState = hasBeenEncrypted() ? 'unencrypted' : 'establishing';
+      }
+      render();
+    });
+    // Aggregated by the worker (at most one message per second). A burst of
+    // failures during a re-key is normal; a sustained stream is not.
+    webrtcManager.on('decrypt-error', (msg) => {
+      console.warn(`Frame decrypt failures in the last interval: ${msg.failures ?? 1}`);
+    });
+  });
 }
 
 /* ── BB84 ───────────────────────────────────────────────────────── */
@@ -616,7 +623,33 @@ function copyJoinLink() {
 }
 
 /** Clear per-session state — also stops BB84 retries and the encryption indicator. */
+/** Start adaptive quality once the call is up (idempotent). */
+function startQualityController() {
+  if (qualityController || !QualityControllerCls || !webrtcManager) return;
+  const pc = webrtcManager.peerConnection;
+  if (!pc || !localStream) return;
+  qualityController = new QualityControllerCls({
+    pc,
+    localStream,
+    sender: webrtcManager.videoSender,
+    onUpdate: (q) => {
+      state.quality = q;
+      render();
+    },
+  });
+  qualityController.start();
+}
+
+function stopQualityController() {
+  if (qualityController) {
+    qualityController.stop();
+    qualityController = null;
+  }
+  state.quality = null;
+}
+
 function resetSession() {
+  stopQualityController();
   if (bb84) bb84.destroy();
   if (benchConnection) {
     benchConnection.close();
