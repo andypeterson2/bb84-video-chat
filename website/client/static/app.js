@@ -43,9 +43,9 @@ const state = {
   // backend in negotiation; the peer must present a complementary bench for
   // optical mode to engage, otherwise both fall back to the simulator.
   optical: { enabled: false, url: 'ws://127.0.0.1:8781', token: '' },
-  opticalStatus: '', // transient connect feedback shown in the settings row
+  opticalStatus: '', // pairing feedback shown in the optical settings row
   quality: null, // adaptive-quality telemetry {tier, bandwidthKbps, rttMs, limitedBy, ...}
-  errorMessage: '',
+  mediaError: '', // camera/mic permission failure, shown inline in the lobby
 };
 
 const OPTICAL_STORAGE_KEY = 'qvc.optical';
@@ -546,6 +546,26 @@ function toggleMute() {
   render();
 }
 
+/**
+ * Acquire camera + mic, surfacing a denial instead of failing silently.
+ * @returns {Promise<boolean>} whether media is ready to proceed.
+ */
+async function startLocalMedia() {
+  try {
+    const s = await webrtcManager.getLocalMedia();
+    localStream = s;
+    state.mediaError = '';
+    showLocalVideo(s);
+    return true;
+  } catch {
+    state.mediaError =
+      'Camera and microphone access is required. Allow it in your browser’s site settings, then try again.';
+    showToast('Camera and microphone access was blocked.', 'error');
+    render();
+    return false;
+  }
+}
+
 async function handleCreateRoom() {
   if (!webrtcManager) return;
   state.isInitiator = true; // the creator runs BB84 as Alice
@@ -553,9 +573,7 @@ async function handleCreateRoom() {
   // variable-latency handshake is nowhere near the DataChannel bootstrap,
   // where a slow init would drop the peer's early fingerprint messages.
   await connectOpticalBenchIfEnabled();
-  const s = await webrtcManager.getLocalMedia();
-  localStream = s;
-  showLocalVideo(s);
+  if (!(await startLocalMedia())) return;
   webrtcManager.createRoom();
 }
 
@@ -595,22 +613,20 @@ async function handleJoinRoom(e) {
   const input = document.getElementById('room-input');
   const id = parseRoomToken(input ? input.value.trim() : '');
   if (!id) {
-    showToast('Paste an invite link.');
+    showToast('Paste an invite link to join.', 'error');
     return;
   }
   if (!webrtcManager) return;
   state.isInitiator = false; // the joiner runs BB84 as Bob
   // Pair the optical bench before connecting (see handleCreateRoom).
   await connectOpticalBenchIfEnabled();
-  const s = await webrtcManager.getLocalMedia();
-  localStream = s;
-  showLocalVideo(s);
+  if (!(await startLocalMedia())) return;
   webrtcManager.joinRoom(id);
 }
 
 /** The user compared the SAS on camera and it differs — treat as MITM. */
 function handleSasMismatch() {
-  showToast('SAS mismatch reported — tearing down the call. Do not trust this channel.');
+  showToast('Code mismatch reported — ending the call. Do not trust this channel.', 'error');
   handleLeave();
 }
 
@@ -618,8 +634,8 @@ function copyJoinLink() {
   if (!state.joinLink) return;
   navigator.clipboard
     .writeText(state.joinLink)
-    .then(() => showToast('Invite link copied — send it to your peer.'))
-    .catch(() => showToast('Copy failed — select the link text manually.'));
+    .then(() => showToast('Invite link copied — send it to your partner.', 'success'))
+    .catch(() => showToast('Copy failed — select the link text manually.', 'error'));
 }
 
 /** Clear per-session state — also stops BB84 retries and the encryption indicator. */
@@ -706,18 +722,21 @@ function fmtTime(s) {
 
 /* ── Toast ──────────────────────────────────────────────────────── */
 let toastTimer = null;
-function showToast(msg) {
+/** Show a transient message. tone: 'info' (default) | 'success' | 'error'. */
+function showToast(msg, tone = 'info') {
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = msg;
-  el.classList.add('visible');
+  el.className = 'toast toast--' + tone; // reset tone classes, keep base
+  void el.offsetWidth; // reflow so a rapid re-toast still animates in
+  el.classList.add('toast--visible');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('visible'), 5000);
+  toastTimer = setTimeout(() => el.classList.remove('toast--visible'), 5000);
 }
 
 /* ── Theme ──────────────────────────────────────────────────────── */
 function getTheme() {
-  return localStorage.getItem('qvc-theme') || 'dark';
+  return localStorage.getItem('qvc-theme') || 'light';
 }
 function setTheme(t) {
   localStorage.setItem('qvc-theme', t);
@@ -737,9 +756,12 @@ function cipherPill() {
       mod: 'encrypted',
       label: `Encrypted · AES-GCM${state.keyIndex !== null ? ` #${state.keyIndex}` : ''}`,
     },
-    unencrypted: { mod: 'unencrypted', label: 'NOT ENCRYPTED — media blocked' },
-    compromised: { mod: 'unencrypted', label: 'CHANNEL INTEGRITY LOST' },
-    unsupported: { mod: 'unencrypted', label: 'ENCRYPTION UNSUPPORTED (browser)' },
+    unencrypted: { mod: 'unencrypted', label: 'Not encrypted — media blocked' },
+    compromised: { mod: 'compromised', label: 'Channel integrity lost' },
+    unsupported: {
+      mod: 'unsupported',
+      label: 'Encryption unsupported — try Chrome, Firefox, or Safari 17+',
+    },
   };
   const v = views[state.cipherState] || views.establishing;
   return `<span class="cipher-pill cipher-pill--${v.mod}">${v.label}</span>`;
@@ -764,6 +786,7 @@ function render() {
         <div class="preview"><video id="local-video" class="preview-video" autoplay muted playsinline></video></div>
         <div class="lobby-actions">
           <button class="btn btn--primary" onclick="handleCreateRoom()" ${!state.signalingConnected ? 'disabled' : ''}>${state.waitingForPeer ? 'Waiting...' : 'Start Session'}</button>
+          ${state.mediaError ? `<div class="form-error">${state.mediaError}</div>` : ''}
           ${
             state.joinLink && state.waitingForPeer
               ? `<div class="invite">
@@ -787,6 +810,7 @@ function render() {
               <input id="optical-url" class="optical-input" type="text" placeholder="ws://127.0.0.1:8781" value="${escapeAttr(state.optical.url)}" oninput="setOpticalField('url', this.value)">
               <input id="optical-token" class="optical-input" type="password" placeholder="Pairing token (from daemon)" oninput="setOpticalField('token', this.value)">
               <span class="optical-hint">Both peers need a bench for optical mode; otherwise the call uses the simulator.</span>
+              ${state.opticalStatus ? `<span class="optical-status ${state.opticalStatus === 'unavailable' ? 'optical-status--error' : ''}">Daemon: ${state.opticalStatus}</span>` : ''}
             </div>`
                 : ''
             }

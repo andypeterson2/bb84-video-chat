@@ -122,19 +122,19 @@ describe('cipher pill', () => {
   test('unencrypted state is the red media-blocked pill', () => {
     const el = pill('unencrypted');
     expect(el.className).toContain('cipher-pill--unencrypted');
-    expect(el.textContent).toContain('NOT ENCRYPTED');
+    expect(el.textContent).toContain('Not encrypted');
   });
 
-  test('compromised state is red and names the integrity loss', () => {
+  test('compromised state is red with its own class and names the integrity loss', () => {
     const el = pill('compromised');
-    expect(el.className).toContain('cipher-pill--unencrypted');
-    expect(el.textContent).toContain('INTEGRITY LOST');
+    expect(el.className).toContain('cipher-pill--compromised');
+    expect(el.textContent).toContain('integrity lost');
   });
 
-  test('unsupported browser state is red and blames the browser', () => {
+  test('unsupported browser state is red with its own class and blames the browser', () => {
     const el = pill('unsupported');
-    expect(el.className).toContain('cipher-pill--unencrypted');
-    expect(el.textContent).toContain('UNSUPPORTED');
+    expect(el.className).toContain('cipher-pill--unsupported');
+    expect(el.textContent).toContain('unsupported');
   });
 
   test('the SAS strip renders while the pill is not red', () => {
