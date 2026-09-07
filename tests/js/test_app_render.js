@@ -146,16 +146,33 @@ describe('cipher pill', () => {
     expect(document.getElementById('sas-digits').textContent).toBe('123456');
   });
 
-  test('the SAS strip is hidden while the pill is red', () => {
-    // A red pill means the channel's security claims failed — rendering a
-    // "compare and trust" prompt beside it would contradict the pill.
+  test('the SAS strip stays visible while the pill is red (the reject control must remain)', () => {
+    // A red pill is exactly when a user might want to reject the channel, so
+    // the compare strip — and its "Doesn't match" control — stays on screen.
     app.state.peerConnected = true;
+    app.state.sasVerified = false;
     app.state.sas = { digits: '123456', emoji: ['🐙', '🦊', '🐢', '🦉'] };
     for (const red of ['unencrypted', 'compromised', 'unsupported']) {
       app.state.cipherState = red;
       app.render();
-      expect(document.querySelector('.sas')).toBeNull();
+      expect(document.querySelector('.sas')).not.toBeNull();
+      expect(document.querySelector('.sas-mismatch')).not.toBeNull();
     }
+  });
+
+  test('the SAS shows a Matches/verify action, and collapses to verified once confirmed', () => {
+    app.state.peerConnected = true;
+    app.state.cipherState = 'encrypted';
+    app.state.sasVerified = false;
+    app.state.sas = { digits: '123456', emoji: ['🐙', '🦊', '🐢', '🦉'] };
+    app.render();
+    expect(document.querySelector('.btn-verify')).not.toBeNull();
+
+    app.state.sasVerified = true;
+    app.render();
+    expect(document.querySelector('.sas--verified')).not.toBeNull();
+    expect(document.querySelector('.btn-verify')).toBeNull();
+    expect(document.querySelector('.verified-badge')).not.toBeNull();
   });
 
   test('the reservoir dashboard shows QBER, keys, rotations and pool — no AES-GCM tile', () => {

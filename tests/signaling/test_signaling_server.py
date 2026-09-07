@@ -245,6 +245,32 @@ class TestSignalingFlow:
         p1.emit_event("request_ice_restart")
         assert len(events_of(env["captured"], "request-ice-restart")) == 0
 
+    def test_eve_demo_relayed_to_peer(self, env):
+        p1 = env["make_peer"]("sid1")
+        p2 = env["make_peer"]("sid2")
+        p1.emit_event("create_room")
+        room_id = env["rooms"].get_peer("sid1").room_id
+        p2.emit_event("join_room", {"room_id": room_id})
+        env["captured"].clear()
+
+        p1.emit_event("eve_demo", {"active": True})
+        relayed = events_of(env["captured"], "eve-demo")
+        assert len(relayed) == 1
+        assert relayed[0]["room"] == "sid2"  # goes to the joiner
+        assert relayed[0]["data"] == {"active": True}
+
+    @pytest.mark.parametrize("payload", [["nope"], "x", 42])
+    def test_eve_demo_ignores_non_dict(self, env, payload):
+        p1 = env["make_peer"]("sid1")
+        p2 = env["make_peer"]("sid2")
+        p1.emit_event("create_room")
+        room_id = env["rooms"].get_peer("sid1").room_id
+        p2.emit_event("join_room", {"room_id": room_id})
+        env["captured"].clear()
+
+        p1.emit_event("eve_demo", payload)  # must not raise
+        assert len(events_of(env["captured"], "eve-demo")) == 0
+
     @pytest.mark.parametrize("event", ["offer", "answer", "ice_candidate"])
     @pytest.mark.parametrize("payload", [["not", "a", "dict"], "string", 42])
     def test_relay_handlers_ignore_non_dict_payloads(self, env, event, payload):

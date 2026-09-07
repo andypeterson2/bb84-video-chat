@@ -46,6 +46,11 @@ const state = {
   opticalStatus: '', // pairing feedback shown in the optical settings row
   quality: null, // adaptive-quality telemetry {tier, bandwidthKbps, rttMs, limitedBy, ...}
   mediaError: '', // camera/mic permission failure, shown inline in the lobby
+  sasVerified: false, // user compared the SAS on camera and confirmed it matches
+  joining: false, // Join clicked, waiting for the peer connection to establish
+  invited: false, // arrived via an invite link (a room token is in the URL)
+  reconnecting: false, // ICE dropped mid-call; the transport is being restored
+  peerEavesdropping: false, // the other peer is running the eavesdropper demo
 };
 
 const OPTICAL_STORAGE_KEY = 'qvc.optical';
@@ -169,6 +174,8 @@ function connectToSignaling(url) {
     });
     webrtcManager.on('remote-stream', (d) => {
       state.peerConnected = true;
+      state.joining = false;
+      state.reconnecting = false;
       state.elapsed = 0;
       startTimer();
       showRemoteVideo(d.stream);
@@ -187,7 +194,7 @@ function connectToSignaling(url) {
       // failed before any streaming, so surface it loudly.
       bb84.init({ roomToken: state.roomId, isInitiator: state.isInitiator }).catch(() => {
         state.cipherState = 'compromised';
-        showToast('Secure-channel setup failed — no key will be established.');
+        showToast('Secure-channel setup failed — no key will be established.', 'error');
         render();
       });
     });
@@ -195,11 +202,25 @@ function connectToSignaling(url) {
     webrtcManager.on('peer-disconnected', () => {
       resetSession();
       render();
-      showToast('Peer disconnected.');
+      showToast('Your partner left the call.', 'info');
     });
-    webrtcManager.on('error', (d) => showToast(d.message || 'Error'));
+    webrtcManager.on('error', (d) => showToast(d.message || 'Something went wrong.', 'error'));
     webrtcManager.on('state-change', (d) => {
-      state.peerConnected = d.state === 'connected';
+      // Keep the user in-call across a transient ICE blip — webrtc.js attempts
+      // an ICE restart — and show a reconnecting indicator rather than dumping
+      // back to the lobby. Only an explicit leave / peer-disconnect tears down.
+      if (d.state === 'connected' || d.state === 'completed') {
+        state.peerConnected = true;
+        state.reconnecting = false;
+      } else if ((d.state === 'disconnected' || d.state === 'failed') && state.peerConnected) {
+        state.reconnecting = true;
+      }
+      render();
+    });
+    // The other peer toggled the eavesdropper demo — surface it so the joiner
+    // (who has no toggle) doesn't read the QBER spike as a real attack.
+    socket.on('eve-demo', (d) => {
+      state.peerEavesdropping = !!(d && d.active);
       render();
     });
     webrtcManager.on('cipher-state', (msg) => {
@@ -413,11 +434,17 @@ function qberStatus() {
   return 'normal';
 }
 
+/**
+ * Channel-quality label for the QBER badge — a link readout ("how noisy is the
+ * quantum channel"), NOT a safety verdict. The cipher pill is the single source
+ * of truth for whether the call is encrypted; a QBER spike raises errors and
+ * rejects frames but the last good key keeps the media safe.
+ */
 function qberStatusLabel() {
-  if (state.qber === null) return 'Exchanging';
-  if (state.qber > QBER_THRESHOLD) return 'Compromised';
-  if (state.qber > QBER_WARNING) return 'Elevated';
-  return 'Secure';
+  if (state.qber === null) return 'Measuring…';
+  if (state.qber > QBER_THRESHOLD) return 'Very noisy';
+  if (state.qber > QBER_WARNING) return 'Noisy';
+  return 'Clean';
 }
 
 /** Backend badge text — never claims photons the backend didn't produce. */
@@ -442,10 +469,13 @@ function toggleEavesdropper() {
   if (!bb84) return;
   state.eavesdropper = !state.eavesdropper;
   bb84.setEavesdropper(state.eavesdropper);
+  // Tell the peer this is a demo, so their QBER spike comes with an explanation.
+  if (socket) socket.emit('eve_demo', { active: state.eavesdropper });
   showToast(
     state.eavesdropper
-      ? 'Eve is intercepting and resending qubits — watch the QBER.'
-      : 'Eve removed — the channel should return to normal noise.',
+      ? 'Eavesdropper on — intercepting and resending qubits. Watch the QBER climb.'
+      : 'Eavesdropper removed — the channel returns to normal noise.',
+    state.eavesdropper ? 'error' : 'success',
   );
   render();
 }
@@ -621,7 +651,16 @@ async function handleJoinRoom(e) {
   // Pair the optical bench before connecting (see handleCreateRoom).
   await connectOpticalBenchIfEnabled();
   if (!(await startLocalMedia())) return;
+  state.joining = true; // show "Connecting…" until the peer stream arrives
+  render();
   webrtcManager.joinRoom(id);
+}
+
+/** The user compared the SAS on camera and it MATCHES — mark the call verified. */
+function handleSasVerify() {
+  state.sasVerified = true;
+  showToast('Identity verified — this call is end-to-end secure.', 'success');
+  render();
 }
 
 /** The user compared the SAS on camera and it differs — treat as MITM. */
@@ -690,8 +729,17 @@ function resetSession() {
   state.joinLink = '';
   state.sas = null;
   state.eavesdropper = false;
+  state.sasVerified = false;
+  state.joining = false;
+  state.reconnecting = false;
+  state.peerEavesdropping = false;
   stopTimer();
   clearRemoteVideo();
+  // Release the camera/mic so the indicator light goes off after the call.
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
 }
 
 function handleLeave() {
@@ -783,21 +831,28 @@ function render() {
         <div class="status"><span class="dot ${state.signalingConnected ? 'dot--ok' : 'dot--off'}"></span>${state.signalingConnected ? 'Connected' : 'Offline'}</div>
       </div>
       <div class="lobby">
+        <div class="lobby-hero">
+          <h2 class="lobby-title">Quantum-secured video</h2>
+          <p class="lobby-intro">A peer-to-peer call whose encryption keys come from BB84 quantum key distribution. Start a session and share the link, or paste an invite to join.</p>
+        </div>
         <div class="preview"><video id="local-video" class="preview-video" autoplay muted playsinline></video></div>
         <div class="lobby-actions">
-          <button class="btn btn--primary" onclick="handleCreateRoom()" ${!state.signalingConnected ? 'disabled' : ''}>${state.waitingForPeer ? 'Waiting...' : 'Start Session'}</button>
-          ${state.mediaError ? `<div class="form-error">${state.mediaError}</div>` : ''}
           ${
-            state.joinLink && state.waitingForPeer
-              ? `<div class="invite">
+            state.joining
+              ? `<div class="lobby-waiting"><span class="lobby-waiting-spinner"></span><span>Connecting securely…</span></div>`
+              : state.waitingForPeer
+                ? `<div class="lobby-waiting"><span class="lobby-waiting-spinner"></span><span>Waiting for your partner to join…</span></div>
+          <div class="invite">
             <input id="invite-link" class="invite-link" type="text" readonly onclick="this.select()">
-            <button class="btn" onclick="copyJoinLink()">Copy invite link</button>
-          </div>`
-              : ''
-          }
+            <button class="btn" onclick="copyJoinLink()">Copy link</button>
+          </div>
+          <p class="lobby-hint">Send this link to the person you want to call.</p>`
+                : `${state.invited ? `<p class="lobby-invited">You’ve been invited to a call — join below, or start your own.</p>` : ''}
+          <button class="btn ${state.invited ? '' : 'btn--primary'}" onclick="handleCreateRoom()" ${!state.signalingConnected ? 'disabled' : ''}>Start Session</button>
+          ${state.mediaError ? `<div class="form-error">${state.mediaError}</div>` : ''}
           <form onsubmit="handleJoinRoom(event)" class="join-form">
             <input id="room-input" type="text" placeholder="Paste invite link" autocomplete="off" ${!state.signalingConnected ? 'disabled' : ''}>
-            <button type="submit" class="btn" ${!state.signalingConnected ? 'disabled' : ''}>Join</button>
+            <button type="submit" class="btn ${state.invited ? 'btn--primary' : ''}" ${!state.signalingConnected ? 'disabled' : ''}>Join</button>
           </form>
           <div class="optical">
             <label class="optical-toggle">
@@ -814,7 +869,8 @@ function render() {
             </div>`
                 : ''
             }
-          </div>
+          </div>`
+          }
         </div>
         <div class="media-controls">
           <button class="media-btn ${state.cameraOn ? '' : 'media-btn--off'}" onclick="toggleCamera()">${state.cameraOn ? ICONS.cameraOn : ICONS.cameraOff}</button>
@@ -853,14 +909,29 @@ function render() {
           <video id="remote-video" class="remote-video" autoplay playsinline></video>
           <video id="local-video" class="pip-video" autoplay muted playsinline></video>
         </div>
-        <div class="call-info"><span>Room <strong id="room-ref"></strong></span>${cipherPill()}<span id="timer">${fmtTime(state.elapsed)}</span></div>
+        ${state.reconnecting ? `<div class="banner banner--warn"><span class="banner-spinner"></span>Reconnecting…</div>` : ''}
+        <div class="call-info"><span>Room <strong id="room-ref"></strong></span>${cipherPill()}${state.sasVerified ? '<span class="verified-badge">✓ Verified</span>' : ''}<span id="timer">${fmtTime(state.elapsed)}</span></div>
         ${
-          state.sas && !pillIsRed()
-            ? `<div class="sas">
+          state.peerEavesdropping && !state.isInitiator
+            ? `<div class="banner banner--info">Your partner is running the eavesdropper demo — the rising QBER is expected, not a real attack.</div>`
+            : ''
+        }
+        ${
+          state.sas
+            ? state.sasVerified
+              ? `<div class="sas sas--verified">
           <span class="sas-emoji">${state.sas.emoji.join(' ')}</span>
           <strong class="sas-digits" id="sas-digits"></strong>
-          <span class="sas-hint">Compare with your partner on camera — same emoji, same digits.</span>
-          <button class="sas-mismatch" onclick="handleSasMismatch()">Doesn't match</button>
+          <span class="sas-hint">Verified on camera — no one is between you.</span>
+        </div>`
+              : `<div class="sas">
+          <span class="sas-emoji">${state.sas.emoji.join(' ')}</span>
+          <strong class="sas-digits" id="sas-digits"></strong>
+          <span class="sas-hint">Compare on camera. If the emoji or digits differ, someone is between you — hang up.</span>
+          <div class="sas-actions">
+            <button class="btn-verify" onclick="handleSasVerify()">Matches — verify</button>
+            <button class="sas-mismatch" onclick="handleSasMismatch()">Doesn't match</button>
+          </div>
         </div>`
             : ''
         }
@@ -869,23 +940,23 @@ function render() {
             state.bb84Active
               ? `
             <div class="qd-header">
-              <span class="qd-title">BB84 Key Reservoir</span>
-              <span class="qd-mode qd-mode--${state.mode || 'pending'}">${modeBadge()}</span>
-              <span class="qd-badge qd-status--${qberStatus()}">${qberStatusLabel()}</span>
+              <span class="qd-title" title="BB84 — the quantum key-distribution protocol that generates this call's encryption keys.">BB84 Key Reservoir</span>
+              <span class="qd-mode qd-mode--${state.mode || 'pending'}" title="Whether keys come from a real optical bench or the in-browser simulator.">${modeBadge()}</span>
+              <span class="qd-badge qd-status--${qberStatus()}" title="Quantum channel noise. This is a link-quality readout, not the encryption status — that's the pill above.">${qberStatusLabel()}</span>
             </div>
             <div class="qd-distill">
-              <div class="qd-distill-bar"><span class="qd-distill-fill" style="width:${(distillFraction() * 100).toFixed(0)}%"></span></div>
-              <span class="qd-distill-label">Distilling next key — ${state.reservoirBits.toLocaleString()}${state.mintBudget ? ` / ${state.mintBudget.toLocaleString()}` : ''} sifted bits</span>
+              <div class="qd-distill-bar"><span class="qd-distill-fill ${state.qber !== null && state.qber > QBER_THRESHOLD ? 'qd-distill-fill--stalled' : ''}" style="width:${(distillFraction() * 100).toFixed(0)}%"></span></div>
+              <span class="qd-distill-label" title="Sifted bits accumulated toward the next key; a noisy channel discards frames and slows this.">Distilling next key — ${state.reservoirBits.toLocaleString()}${state.mintBudget ? ` / ${state.mintBudget.toLocaleString()}` : ''} sifted bits</span>
             </div>
             <div class="qd-metrics">
-              <div class="qd-metric"><span class="qd-metric-value ${state.qber !== null && state.qber > QBER_THRESHOLD ? 'qd-metric--danger' : state.qber !== null && state.qber > QBER_WARNING ? 'qd-metric--warning' : ''}">${state.qber !== null ? (state.qber * 100).toFixed(1) + '%' : '--'}</span><span class="qd-metric-label">QBER</span></div>
-              <div class="qd-metric"><span class="qd-metric-value">${state.keysMinted}</span><span class="qd-metric-label">Keys</span></div>
-              <div class="qd-metric"><span class="qd-metric-value">${state.rotations}</span><span class="qd-metric-label">Rotations</span></div>
-              <div class="qd-metric"><span class="qd-metric-value">${state.poolDepth}</span><span class="qd-metric-label">Pool</span></div>
+              <div class="qd-metric" title="Quantum bit error rate — how often a test bit disagrees. A spike above 11% aborts the batch (noise or eavesdropping)."><span class="qd-metric-value ${state.qber !== null && state.qber > QBER_THRESHOLD ? 'qd-metric--danger' : state.qber !== null && state.qber > QBER_WARNING ? 'qd-metric--warning' : ''}">${state.qber !== null ? (state.qber * 100).toFixed(1) + '%' : '--'}</span><span class="qd-metric-label">QBER</span></div>
+              <div class="qd-metric" title="Encryption keys minted this call."><span class="qd-metric-value">${state.keysMinted}</span><span class="qd-metric-label">Keys</span></div>
+              <div class="qd-metric" title="Times the media encryption key has rotated to a fresh one."><span class="qd-metric-value">${state.rotations}</span><span class="qd-metric-label">Rotations</span></div>
+              <div class="qd-metric" title="Keys buffered and ready to rotate in."><span class="qd-metric-value">${state.poolDepth}</span><span class="qd-metric-label">Pool</span></div>
             </div>
             <canvas id="qd-chart" class="qd-chart"></canvas>
             ${state.isInitiator ? `<button class="qd-eve-btn ${state.eavesdropper ? 'qd-eve-btn--active' : ''}" onclick="toggleEavesdropper()">${state.eavesdropper ? 'Eavesdropper active — click to remove' : 'Simulate eavesdropper'}</button>` : ''}`
-              : '<div class="qd-inactive">Establishing quantum channel...</div>'
+              : '<div class="qd-inactive">Establishing quantum channel…</div>'
           }
         </div>
         <div class="toolbar">
@@ -922,6 +993,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setTheme(getTheme());
   loadOpticalSettings();
   pendingRoomToken = parseRoomToken(window.location.hash);
+  state.invited = !!pendingRoomToken; // arrived via an invite link → promote Join
   connectToSignaling(window.QVC_SIGNALING_URL || window.location.origin);
   render();
 });
@@ -933,6 +1005,7 @@ window.toggleCamera = toggleCamera;
 window.toggleMute = toggleMute;
 window.toggleEavesdropper = toggleEavesdropper;
 window.copyJoinLink = copyJoinLink;
+window.handleSasVerify = handleSasVerify;
 window.handleSasMismatch = handleSasMismatch;
 window.toggleOptical = toggleOptical;
 window.setOpticalField = setOpticalField;

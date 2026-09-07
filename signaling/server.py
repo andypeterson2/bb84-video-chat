@@ -402,6 +402,22 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
         if other_sid:
             sio.emit("request-ice-restart", {}, room=other_sid)
 
+    @sio.event
+    def eve_demo(sid, data):
+        """Relay the eavesdropper-demo on/off state to the room peer.
+
+        The joiner has no toggle, so this tells them the QBER spike is a demo
+        the other side triggered, not a real attack.
+        """
+        if not isinstance(data, dict):
+            return
+        room = rooms.get_peer_room(sid)
+        if room is None:
+            return
+        other_sid = room.other_peer(sid)
+        if other_sid:
+            sio.emit("eve-demo", {"active": bool(data.get("active"))}, room=other_sid)
+
     register_error_handlers(flask_app)
 
     return flask_app, sio, rooms
