@@ -15,14 +15,21 @@
  *   - out: { type: 'decrypt-error', failures } (debounced, at most one per second)
  */
 
-// Key ring: the current key plus its predecessor, selected per-frame by the
-// keyIndex the sender wrote into the frame header. During a re-key the two
-// sides never switch on the same frame; with a single key slot every frame
-// sent under the other epoch failed auth and the video froze at each re-key.
+// SFrame-aligned framing (RFC 9605): the shared crypto.js module derives a
+// per-epoch AES-GCM key + salt, seals each frame under a salt-XOR-counter nonce
+// with the header bound as AAD, and opens frames by the KID in that header. The
+// worker owns only the epoch ring, the send counter, and the fail-closed policy.
+import { deriveEpoch, sealFrame, openFrame } from './crypto.js';
+
+// Key ring: the current epoch plus its predecessor, selected per-frame by the
+// KID the sender wrote into the header. During a re-key the two sides never
+// switch on the same frame; with a single slot every frame under the other
+// epoch failed auth and the video froze at each re-key.
 const KEY_RING_SIZE = 2;
-const keyRing = new Map(); // keyIndex -> CryptoKey
-let currentKey = null;
+const keyRing = new Map(); // KID -> { key: CryptoKey, salt: Uint8Array(12) }
+let currentEpoch = null; // { key, salt } for currentKeyIndex
 let currentKeyIndex = 0;
+let sendCtr = 0; // per-epoch monotonic frame counter (reset on each new epoch)
 let announcedKeyless = false;
 
 // Per-frame postMessage fanout (2 messages per frame at 30-60 fps per
@@ -66,15 +73,6 @@ function noteDecryptFailure() {
   }
 }
 
-/**
- * Import a raw AES-128-GCM key.
- * @param {Uint8Array} rawKey
- * @returns {Promise<CryptoKey>}
- */
-async function importKey(rawKey) {
-  return crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-}
-
 /** Drop a keyless frame, announcing the state once (not per frame). */
 function dropKeyless() {
   if (!announcedKeyless) {
@@ -85,30 +83,21 @@ function dropKeyless() {
 
 /**
  * Encrypt an encoded frame.
- * Frame format: [keyIndex:2][iv:12][ciphertext+tag]
+ * Frame format: [SFrame header][ciphertext+tag], nonce = salt XOR CTR, the
+ * header bound as AES-GCM additional authenticated data.
  */
 async function encryptFrame(frame, controller) {
-  if (!currentKey) {
+  if (!currentEpoch) {
     dropKeyless();
     return; // fail closed: no key, no frame
   }
 
   const t0 = performance.now();
-  // Random 96-bit IV per frame. AES-GCM's random-IV birthday bound (a nonce
-  // collision becomes non-negligible near ~2^32 frames under one key) is kept
-  // far out of reach by key rotation: the reservoir mints a fresh key on a
-  // ~10s floor (ROTATION_FLOOR_MS in reservoir.js), so frames-per-key stays in
-  // the thousands. If that cadence is ever raised toward 2^32 frames/key,
-  // switch to a deterministic counter IV before doing so.
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, currentKey, frame.data);
-
-  const result = new Uint8Array(2 + 12 + ciphertext.byteLength);
-  result[0] = currentKeyIndex & 0xff;
-  result[1] = (currentKeyIndex >> 8) & 0xff;
-  result.set(iv, 2);
-  result.set(new Uint8Array(ciphertext), 14);
-  frame.data = result.buffer;
+  frame.data = await sealFrame(frame.data, currentEpoch, {
+    kid: currentKeyIndex,
+    ctr: sendCtr++,
+    isKey: frame.type === 'key',
+  });
 
   stats.encryptFrames++;
   stats.encryptLatencyTotalUs += (performance.now() - t0) * 1000;
@@ -121,46 +110,31 @@ async function encryptFrame(frame, controller) {
  * Decrypt an encoded frame.
  */
 async function decryptFrame(frame, controller) {
-  if (!currentKey) {
+  if (keyRing.size === 0) {
     dropKeyless();
     return; // fail closed: cannot authenticate, do not render
   }
 
   const t0 = performance.now();
-  const view = new Uint8Array(frame.data);
 
-  if (view.length < 14) {
-    // Too small to carry [keyIndex:2][iv:12] — not one of our frames. Drop it;
-    // passing it through would render unauthenticated data.
-    return;
-  }
-
-  // Select the key the SENDER used (header keyIndex), not whatever this side
-  // installed last — the two sides never re-key on the same frame boundary.
-  const frameKeyIndex = view[0] | (view[1] << 8);
-  const key = keyRing.get(frameKeyIndex);
-  if (!key) {
-    // Outside the ring: either far ahead (we missed a re-key) or long stale.
-    noteDecryptFailure();
-    return;
-  }
-
-  const iv = view.slice(2, 14);
-  const ciphertext = view.slice(14);
-
+  // Open selects the epoch by the KID the SENDER wrote into the header (the two
+  // sides never re-key on the same frame boundary). null = malformed header,
+  // drop silently; a throw = unknown KID or GCM auth/AAD mismatch, count it.
+  let opened;
   try {
-    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-    frame.data = plaintext;
-
-    stats.decryptFrames++;
-    stats.decryptLatencyTotalUs += (performance.now() - t0) * 1000;
-    maybeReport();
-
-    controller.enqueue(frame);
+    opened = await openFrame(frame.data, (kid) => keyRing.get(kid));
   } catch {
-    // Decryption failed — drop the frame (GCM auth tag mismatch)
     noteDecryptFailure();
+    return;
   }
+  if (!opened) return;
+  frame.data = opened.plaintext;
+
+  stats.decryptFrames++;
+  stats.decryptLatencyTotalUs += (performance.now() - t0) * 1000;
+  maybeReport();
+
+  controller.enqueue(frame);
 }
 
 /* ── Message handler (key updates from main thread) ────────────── */
@@ -168,9 +142,13 @@ async function decryptFrame(frame, controller) {
 self.onmessage = async (event) => {
   const { type, rawKey, keyIndex } = event.data;
   if (type === 'set-key') {
-    currentKey = await importKey(rawKey);
+    const epoch = await deriveEpoch(rawKey);
+    currentEpoch = epoch;
     currentKeyIndex = keyIndex;
-    keyRing.set(keyIndex, currentKey);
+    // Fresh counter space for the new epoch: its salt is independent, so a CTR
+    // restarting at 0 still keeps every (key, salt, CTR) triple unique.
+    sendCtr = 0;
+    keyRing.set(keyIndex, epoch);
     // Keep only the newest KEY_RING_SIZE epochs (Map preserves insert order).
     for (const idx of keyRing.keys()) {
       if (keyRing.size <= KEY_RING_SIZE) break;

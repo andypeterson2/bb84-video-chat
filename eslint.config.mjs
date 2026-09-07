@@ -49,11 +49,12 @@ export default [
     rules: sharedRules,
   },
   {
-    // The Insertable-Streams crypto worker — Web Worker global scope.
+    // The Insertable-Streams crypto worker — an ES-module Web Worker (it imports
+    // the shared crypto.js), loaded with `type: 'module'`.
     files: ['website/client/static/js/crypto-worker.js'],
     languageOptions: {
       ecmaVersion: 'latest',
-      sourceType: 'script',
+      sourceType: 'module',
       globals: { ...globals.worker },
     },
     plugins: { sonarjs },
