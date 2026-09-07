@@ -81,6 +81,29 @@ def events_of(captured, event_name):
     return [e for e in captured if e["event"] == event_name]
 
 
+class TestServerConfig:
+    """Socket.IO server is constructed with the deploy-safe async model and a
+    bounded inbound buffer."""
+
+    def test_async_mode_honors_env(self, monkeypatch):
+        # main.py sets this to "eventlet" so the Socket.IO async model matches
+        # the eventlet WSGI server; a "threading" Socket.IO under eventlet
+        # spawns OS threads that race the greenlets over shared room state.
+        monkeypatch.setenv("SIO_ASYNC_MODE", "eventlet")
+        _, sio, _ = create_app()
+        assert sio.async_mode == "eventlet"
+
+    def test_max_http_buffer_defaults_to_64k(self, monkeypatch):
+        monkeypatch.delenv("QVC_MAX_HTTP_BUFFER", raising=False)
+        _, sio, _ = create_app()
+        assert sio.eio.max_http_buffer_size == 64 * 1024
+
+    def test_max_http_buffer_honors_env(self, monkeypatch):
+        monkeypatch.setenv("QVC_MAX_HTTP_BUFFER", "4096")
+        _, sio, _ = create_app()
+        assert sio.eio.max_http_buffer_size == 4096
+
+
 class TestAdminEndpoint:
     """REST /admin/status endpoint."""
 
@@ -202,6 +225,23 @@ class TestSignalingFlow:
         p1.emit_event("offer", {"sdp": "orphan"})
         offers = events_of(env["captured"], "offer")
         assert len(offers) == 0
+
+    @pytest.mark.parametrize("event", ["offer", "answer", "ice_candidate"])
+    @pytest.mark.parametrize("payload", [["not", "a", "dict"], "string", 42])
+    def test_relay_handlers_ignore_non_dict_payloads(self, env, event, payload):
+        """A client sending a non-dict payload must be ignored, not 500 the
+        handler: the relay handlers call data.get(...), which raises
+        AttributeError on a list/str/int."""
+        p1 = env["make_peer"]("sid1")
+        p2 = env["make_peer"]("sid2")
+        p1.emit_event("create_room")
+        room_id = env["rooms"].get_peer("sid1").room_id
+        p2.emit_event("join_room", {"room_id": room_id})
+        env["captured"].clear()
+
+        p1.emit_event(event, payload)  # must not raise
+        relayed = events_of(env["captured"], event.replace("_", "-"))
+        assert len(relayed) == 0
 
     def test_create_room_error_when_already_in_room(self, env):
         p1 = env["make_peer"]("sid1")

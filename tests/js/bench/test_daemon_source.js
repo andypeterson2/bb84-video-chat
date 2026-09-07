@@ -163,4 +163,35 @@ describe('decodeDaemonDetections', () => {
     expect(Array.from(d.indices)).toEqual([0, 4]);
     expect(Array.from(d.bits)).toEqual([1, 1]);
   });
+
+  test('returns null (never throws) on malformed messages', () => {
+    const good = toB64(encodeIndices([0, 4]));
+    // Each of these would previously throw a TypeError out of the decoder.
+    expect(decodeDaemonDetections(null)).toBeNull();
+    expect(decodeDaemonDetections({})).toBeNull(); // no frame_id
+    expect(decodeDaemonDetections({ frame_id: 1.5, indices: good })).toBeNull();
+    expect(decodeDaemonDetections({ frame_id: 1 })).toBeNull(); // missing indices
+    expect(decodeDaemonDetections({ frame_id: 1, indices: '!!!not-b64' })).toBeNull();
+    expect(
+      decodeDaemonDetections({ frame_id: 1, indices: good, bits: null, bases: null }),
+    ).toBeNull();
+  });
+});
+
+describe('DaemonConnection dispatch robustness', () => {
+  test('a malformed detections message does not throw and surfaces nothing', async () => {
+    const { conn, ws, promise } = connect();
+    ws.fireOpen();
+    ws.deliver({ t: 'paired', role: 'detector' });
+    await promise;
+    const source = new DaemonFrameSource(conn);
+    const got = [];
+    source.onDetections((d) => got.push(d));
+
+    // Garbage indices → decode returns null; the dispatch must swallow it.
+    expect(() =>
+      ws.deliver({ t: 'detections', frame_id: 2, indices: '@@@', bits: '@@@', bases: '@@@' }),
+    ).not.toThrow();
+    expect(got).toHaveLength(0);
+  });
 });
