@@ -44,7 +44,7 @@ test('two benches negotiate optical mode and mint a shared key', async ({ browse
     // Eve on the source bench drives QBER over threshold; the channel latches
     // red (the SAS strip disappears) and recovers when Eve is removed.
     await pageA.evaluate(() => window.toggleEavesdropper());
-    await expect(pageA.locator('.cipher-pill')).toContainText('INTEGRITY LOST', {
+    await expect(pageA.locator('.cipher-pill')).toContainText('integrity lost', {
       timeout: 45_000,
     });
     await expect(pageA.locator('.sas')).toHaveCount(0);
