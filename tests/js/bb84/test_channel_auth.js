@@ -347,19 +347,29 @@ describe('Orchestrator auth integration', () => {
       await p.untilMinted(1);
       expect(p.fpCalls).toEqual({ alice: 1, bob: 1 });
       const firstSas = phase(p, 'alice', 'sas').at(-1).sas;
+      // installed persists across calls, so snapshot call #1's key count and
+      // index by it — the old at(-1) raced call #1's own rotation (it can mint
+      // 2 keys before we look, so at(-1).keyIndex was 1, not 0).
+      const call1Keys = p.installed.alice.length;
 
       p.destroy();
       await p.init();
-      await p.untilMinted(1);
 
-      expect(p.fpCalls).toEqual({ alice: 2, bob: 2 });
+      // Fresh fingerprint exchange + stable SAS is the test's core claim and is
+      // reliable (no minting needed — SAS is emitted right after the exchange).
+      await p.waitFor(() => expect(p.fpCalls).toEqual({ alice: 2, bob: 2 }));
       const secondSas = phase(p, 'alice', 'sas').at(-1).sas;
       expect(secondSas).toEqual(firstSas); // same fingerprints ⇒ same (pure) SAS
-      expect(p.installed.alice.at(-1).keyIndex).toBe(0); // key index reset per call
+
+      // Key index resets per call: call #2's FIRST installed key is index 0.
+      // Wait on alice's own next mint (not both sides) with a generous budget.
+      await p.waitFor(() => expect(p.installed.alice.length).toBeGreaterThan(call1Keys), 16000);
+      expect(p.installed.alice[call1Keys].keyIndex).toBe(0);
     } finally {
       p.destroy();
     }
-  });
+    // The second-call mint wait can exceed the default 5s test timeout under load.
+  }, 25000);
 
   test("call #1's exhausted latch does not leak into call #2", async () => {
     const p = await authPair({ bobToken: 'attacker-token' });
