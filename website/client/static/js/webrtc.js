@@ -206,7 +206,13 @@ export class WebRTCManager {
   /* ── Peer Connection ─────────────────────────────────────────── */
 
   async _createPeerConnection() {
-    this._pc = new RTCPeerConnection({ iceServers: this._iceServers });
+    this._pc = new RTCPeerConnection({
+      iceServers: this._iceServers,
+      bundlePolicy: 'max-bundle',
+      // Warm a few candidates so the offer already carries them (lower setup
+      // latency); harmless when TURN isn't configured.
+      iceCandidatePoolSize: 4,
+    });
 
     this._pc.onicecandidate = (event) => {
       if (event.candidate) {

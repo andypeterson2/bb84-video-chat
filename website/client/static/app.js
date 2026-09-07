@@ -89,6 +89,28 @@ const ICONS = {
 
 /* ── Signaling ──────────────────────────────────────────────────── */
 
+/**
+ * Fetch ICE servers (STUN + short-lived TURN credentials) from the signaling
+ * backend. Falls back to public STUN so a fetch failure never blocks calling —
+ * relay-requiring peers just won't connect, exactly as before this endpoint.
+ * @param {string} base - signaling origin
+ * @returns {Promise<RTCIceServer[]>}
+ */
+async function fetchIceServers(base) {
+  const fallback = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ];
+  try {
+    const res = await fetch(`${base.replace(/\/$/, '')}/ice-servers`, { cache: 'no-store' });
+    if (!res.ok) return fallback;
+    const data = await res.json();
+    return Array.isArray(data.iceServers) && data.iceServers.length ? data.iceServers : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function connectToSignaling(url) {
   if (socket) socket.disconnect();
   socket = io(url, { transports: ['websocket'] });
@@ -105,12 +127,16 @@ function connectToSignaling(url) {
   socket.on('welcome', () => render());
 
   Promise.all([import('./js/webrtc.js'), import('./js/bb84/orchestrator.js')]).then(
-    ([{ WebRTCManager }, { BB84Orchestrator }]) => {
+    async ([{ WebRTCManager }, { BB84Orchestrator }]) => {
+      // ICE servers (STUN + short-lived TURN) come from the signaling backend so
+      // relay credentials stay short-lived and no long-lived secret ships to the
+      // client. Fetched before the manager so the first PeerConnection has them.
+      const iceServers = await fetchIceServers(url);
       // Attach the Insertable Streams transforms up front. The crypto worker is
       // FAIL-CLOSED: it drops every frame until BB84 delivers a key, then encrypts
       // with no renegotiation. (Constructing with `false` never created the worker
       // at all, so a derived key had nowhere to go — encryption never engaged.)
-      webrtcManager = new WebRTCManager(socket, { enableEncryption: true });
+      webrtcManager = new WebRTCManager(socket, { enableEncryption: true, iceServers });
 
       bb84 = new BB84Orchestrator({
         webrtcManager,

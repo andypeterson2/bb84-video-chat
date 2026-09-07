@@ -28,6 +28,7 @@ from werkzeug.exceptions import NotFound
 from signaling.errors import register_error_handlers, respond_error
 from signaling.rooms import RoomManager, redact
 from signaling.throttle import RateLimiter
+from signaling.turn import ice_servers
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,11 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
             "version": _version(),
             "uptime_s": round(rooms.uptime_seconds, 1),
         })
+
+    @flask_app.get("/ice-servers")
+    def ice_servers_route():
+        """WebRTC ICE servers: STUN, plus short-lived TURN credentials if configured."""
+        return jsonify({"iceServers": ice_servers()})
 
     @flask_app.get("/api")
     def api_index():
