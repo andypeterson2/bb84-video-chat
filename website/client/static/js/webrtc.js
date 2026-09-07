@@ -16,6 +16,18 @@ const ICE_SERVERS = [
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
 
+/** Default capture constraints — real values, not bare booleans. */
+const DEFAULT_MEDIA_CONSTRAINTS = {
+  video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+};
+
+/** Encoder ceiling for the video sender; the QualityController lowers it. */
+const DEFAULT_MAX_BITRATE = 2_500_000;
+
+/** Grace before an ICE `disconnected` (a transient blip) triggers a restart. */
+const ICE_DISCONNECT_GRACE_MS = 3000;
+
 export class WebRTCManager {
   /**
    * @param {object} socket - Socket.IO client instance (for signaling).
@@ -34,6 +46,9 @@ export class WebRTCManager {
     this._listeners = {};
     this._isInitiator = false;
     this._roomId = null;
+    this._videoSender = null;
+    this._reconnectTimer = null;
+    this._restarting = false;
 
     this._bindSignaling();
   }
@@ -44,9 +59,19 @@ export class WebRTCManager {
    * Get local media stream (camera + microphone).
    * @returns {Promise<MediaStream>}
    */
-  async getLocalMedia(constraints = { video: true, audio: true }) {
+  async getLocalMedia(constraints = DEFAULT_MEDIA_CONSTRAINTS) {
     this._localStream = await navigator.mediaDevices.getUserMedia(constraints);
     return this._localStream;
+  }
+
+  /** The active RTCPeerConnection (for the QualityController's getStats). */
+  get peerConnection() {
+    return this._pc;
+  }
+
+  /** The video RTCRtpSender (for adaptive encoder bitrate). */
+  get videoSender() {
+    return this._videoSender;
   }
 
   /**
@@ -159,11 +184,25 @@ export class WebRTCManager {
     });
 
     this._socket.on('offer', async (data) => {
-      // Renegotiation guard: an offer arriving mid-call would silently rebuild
-      // the peer connection with a fresh, KEYLESS crypto worker — a downgrade
-      // that used to flow plaintext while the UI still said encrypted. There
-      // is no legitimate renegotiation path in this app; ignore and surface it.
+      // Mid-call offer handling. The ONLY legitimate mid-call offer is an ICE
+      // restart, and it is applied to the EXISTING peer connection — reusing its
+      // senders, encoded-transform, and keyed crypto worker — so the fail-closed
+      // key is preserved and the worker is never rebuilt keyless. Any other
+      // mid-call offer is the downgrade the guard exists to reject: an
+      // unflagged offer would silently rebuild the connection with a fresh
+      // keyless worker, flowing plaintext while the UI still said encrypted.
       if (this._pc) {
+        if (data.iceRestart && data.sdp) {
+          try {
+            await this._pc.setRemoteDescription(data.sdp);
+            const answer = await this._pc.createAnswer();
+            await this._pc.setLocalDescription(answer);
+            this._socket.emit('answer', { sdp: this._pc.localDescription });
+          } catch (e) {
+            console.warn('Failed to apply ICE-restart offer:', e);
+          }
+          return;
+        }
         console.warn('Ignoring unexpected mid-call SDP offer (renegotiation is not supported)');
         this._emit('error', { message: 'unexpected renegotiation offer ignored' });
         return;
@@ -198,6 +237,13 @@ export class WebRTCManager {
       this._emit('peer-disconnected');
     });
 
+    // The answerer nudges the initiator to restart ICE if it noticed the
+    // failure first; only the initiator ever generates the restart offer (no
+    // glare). A stale nudge after teardown is harmless — no _pc, no-op.
+    this._socket.on('request-ice-restart', () => {
+      if (this._isInitiator) this._restartIce();
+    });
+
     this._socket.on('error', (data) => {
       this._emit('error', data);
     });
@@ -221,7 +267,9 @@ export class WebRTCManager {
     };
 
     this._pc.oniceconnectionstatechange = () => {
-      this._emit('state-change', { state: this._pc.iceConnectionState });
+      const st = this._pc.iceConnectionState;
+      this._emit('state-change', { state: st });
+      this._maybeReconnect(st);
     };
 
     this._pc.ontrack = (event) => {
@@ -273,6 +321,32 @@ export class WebRTCManager {
       if (this._enableEncryption) {
         this._applyEncryptTransform(sender);
       }
+      if (track.kind === 'video') {
+        this._videoSender = sender;
+        this._applyEncoderParams(sender);
+      }
+    }
+  }
+
+  /**
+   * Encoder ceiling + graceful-degradation hints on the video sender. `L1T3`
+   * temporal scalability keeps a valid lower-frame-rate picture when upper
+   * temporal layers are lost, and lets the encoder shed a layer on a bandwidth
+   * drop without a keyframe. Best-effort — unsupported options just don't apply;
+   * the QualityController later lowers `maxBitrate` from live stats.
+   * @private
+   */
+  _applyEncoderParams(sender) {
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      params.encodings[0].maxBitrate = DEFAULT_MAX_BITRATE;
+      params.encodings[0].maxFramerate = 30;
+      params.encodings[0].scalabilityMode = 'L1T3';
+      params.degradationPreference = 'balanced';
+      sender.setParameters(params).catch(() => {});
+    } catch {
+      /* setParameters shape not ready / unsupported — encoder uses defaults */
     }
   }
 
@@ -289,6 +363,67 @@ export class WebRTCManager {
     channel.onopen = () => this._emit('data-channel-open');
     channel.onmessage = (event) => this._emit('data-channel-message', event.data);
     channel.onclose = () => this._emit('data-channel-close');
+  }
+
+  /* ── Reconnection (ICE restart) ──────────────────────────────── */
+
+  /**
+   * React to an ICE connection state change. `failed` restarts immediately;
+   * `disconnected` (often a transient blip) waits a short grace before
+   * restarting and is cancelled if the connection recovers. The initiator
+   * generates the restart offer; the answerer nudges it instead (no glare).
+   * Reconnection reuses the EXISTING peer connection, so the fail-closed
+   * encryption key is preserved throughout.
+   * @private
+   */
+  _maybeReconnect(state) {
+    if (state === 'connected' || state === 'completed') {
+      this._clearReconnectTimer();
+    } else if (state === 'failed') {
+      this._clearReconnectTimer();
+      this._triggerReconnect();
+    } else if (state === 'disconnected' && !this._reconnectTimer) {
+      this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = null;
+        const st = this._pc && this._pc.iceConnectionState;
+        if (st === 'disconnected' || st === 'failed') this._triggerReconnect();
+      }, ICE_DISCONNECT_GRACE_MS);
+    }
+  }
+
+  /** @private initiator restarts ICE; answerer asks the initiator to. */
+  _triggerReconnect() {
+    if (!this._pc) return;
+    if (this._isInitiator) this._restartIce();
+    else this._socket.emit('request_ice_restart');
+  }
+
+  /**
+   * Regenerate ICE credentials on the EXISTING peer connection and re-offer,
+   * flagged so the peer applies it in place. Never rebuilds the connection or
+   * the crypto worker, so the key survives the reconnection.
+   * @private
+   */
+  async _restartIce() {
+    if (!this._pc || !this._isInitiator || this._restarting) return;
+    this._restarting = true;
+    try {
+      const offer = await this._pc.createOffer({ iceRestart: true });
+      await this._pc.setLocalDescription(offer);
+      this._socket.emit('offer', { sdp: this._pc.localDescription, iceRestart: true });
+    } catch (e) {
+      console.warn('ICE restart failed:', e);
+    } finally {
+      this._restarting = false;
+    }
+  }
+
+  /** @private */
+  _clearReconnectTimer() {
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
   }
 
   /* ── Insertable Streams (Encoded Transforms) ─────────────────── */
@@ -312,6 +447,9 @@ export class WebRTCManager {
   /* ── Cleanup ─────────────────────────────────────────────────── */
 
   _cleanup() {
+    this._clearReconnectTimer();
+    this._videoSender = null;
+    this._restarting = false;
     if (this._pc) {
       this._pc.close();
       this._pc = null;

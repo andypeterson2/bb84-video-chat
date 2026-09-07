@@ -392,6 +392,16 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
                 "from": sid,
             }, room=other_sid)
 
+    @sio.event
+    def request_ice_restart(sid):
+        """Relay an ICE-restart request to the room peer (answerer → initiator)."""
+        room = rooms.get_peer_room(sid)
+        if room is None:
+            return
+        other_sid = room.other_peer(sid)
+        if other_sid:
+            sio.emit("request-ice-restart", {}, room=other_sid)
+
     register_error_handlers(flask_app)
 
     return flask_app, sio, rooms
