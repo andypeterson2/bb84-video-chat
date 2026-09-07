@@ -16,14 +16,19 @@ const ICE_SERVERS = [
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
 
-/** Default capture constraints — real values, not bare booleans. */
+/** Default capture constraints — real values, not bare booleans. `ideal` (not
+ * `exact`) so a camera that can't do 1080p falls back gracefully instead of
+ * failing getUserMedia; the QualityController lowers the live resolution. */
 const DEFAULT_MEDIA_CONSTRAINTS = {
-  video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+  video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
   audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 };
 
-/** Encoder ceiling for the video sender; the QualityController lowers it. */
-const DEFAULT_MAX_BITRATE = 2_500_000;
+/** Encoder ceiling for the video sender; the QualityController lowers it. This
+ * is a CEILING, not a target — GCC/TWCC still throttles the real send rate to
+ * the measured pipe, so a high ceiling costs nothing on a constrained link and
+ * unlocks full 1080p throughput on a fat one. */
+const DEFAULT_MAX_BITRATE = 6_000_000;
 
 /** Grace before an ICE `disconnected` (a transient blip) triggers a restart. */
 const ICE_DISCONNECT_GRACE_MS = 3000;

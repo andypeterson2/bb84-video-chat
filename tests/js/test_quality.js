@@ -98,9 +98,25 @@ test('hysteresis: a single low sample does not switch tiers', async () => {
   await poll(controller, 1);
   await poll(controller, 1); // back-to-back but only 2 confirming samples so far
 
-  // Still at the starting SD tier — not enough confirmations to drop.
-  expect(updates.at(-1).tier).toBe('SD');
+  // Still at the starting top tier — not enough confirmations to drop.
+  expect(updates.at(-1).tier).toBe('Full HD');
   expect(sender.appliedBitrates).toHaveLength(0);
+});
+
+test('a fat link stays at the Full HD top tier and caps the encoder at 6 Mbps', async () => {
+  const sender = new FakeSender();
+  const { controller, updates, setStats } = makeController({ sender });
+
+  // Drop to Low first, then confirm the ladder climbs all the way back to
+  // Full HD (6 Mbps) when the estimate is well above its 4 Mbps floor.
+  setStats(statsMap({ availableOutgoingBitrate: 300_000 }));
+  await poll(controller, 3);
+  setStats(statsMap({ availableOutgoingBitrate: 8_000_000 }));
+  await poll(controller, 3);
+
+  expect(updates.at(-1).tier).toBe('Full HD');
+  expect(updates.at(-1).targetRes).toBe('1080p');
+  expect(sender.appliedBitrates.at(-1)).toBe(6_000_000);
 });
 
 test('a sustained high estimate raises the tier and bitrate back up', async () => {

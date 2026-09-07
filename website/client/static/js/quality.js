@@ -13,6 +13,7 @@ const POLL_INTERVAL_MS = 2000;
 const HYSTERESIS_COUNT = 3;
 
 const TIERS = [
+  { label: 'Full HD', minKbps: 4000, targetKbps: 6000, width: 1920, height: 1080, fps: 30 },
   { label: 'HD', minKbps: 2500, targetKbps: 2500, width: 1280, height: 720, fps: 30 },
   { label: 'SD', minKbps: 1000, targetKbps: 1200, width: 640, height: 480, fps: 30 },
   { label: 'SD Low', minKbps: 500, targetKbps: 700, width: 640, height: 480, fps: 15 },
@@ -36,7 +37,11 @@ export class QualityController {
     this._intervalId = null;
     this._prevBytesSent = null;
     this._prevTimestamp = null;
-    this._currentTier = TIERS[1]; // start at SD
+    // Start at the top tier and DOWNSHIFT on evidence, rather than climbing up
+    // from SD (which left a fat link at SD for the ~6s the up-shift hysteresis
+    // takes). The high encoder ceiling is GCC-throttled, so an over-optimistic
+    // start self-corrects within the first few polls on a constrained link.
+    this._currentTier = TIERS[0];
     this._pendingTier = null;
     this._pendingCount = 0;
   }
