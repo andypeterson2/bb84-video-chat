@@ -62,6 +62,19 @@ class TestAdminAuth:
         resp = flask_app.test_client().get("/admin/status", headers=ADMIN_HEADERS)
         assert resp.status_code == 404
 
+    def test_non_ascii_header_is_404_not_500(self):
+        """A non-ASCII secret header must not crash the comparison.
+
+        hmac.compare_digest raises TypeError on non-ASCII str operands; an
+        unhandled 500 there distinguishes 'admin enabled' (500) from
+        'disabled' (404), the exact oracle the fail-closed 404 shaping denies.
+        """
+        flask_app, _, _ = create_app()
+        resp = flask_app.test_client().get(
+            "/admin/status", headers={"X-Admin-Secret": "\x80\xffnope"},
+        )
+        assert resp.status_code == 404
+
     def test_guard_404_matches_framework_404_shape(self):
         """The guard's 404 must be indistinguishable from a missing route."""
         flask_app, _, _ = create_app()

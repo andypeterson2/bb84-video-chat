@@ -184,7 +184,13 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
         if not flask_req.path.startswith("/admin"):
             return None
         supplied = flask_req.headers.get("X-Admin-Secret", "")
-        if not admin_secret or not hmac.compare_digest(supplied, admin_secret):
+        # Compare as bytes: hmac.compare_digest raises TypeError on non-ASCII
+        # str operands, and an unhandled 500 there would distinguish "admin
+        # enabled" from the 404 returned when it is disabled — the exact oracle
+        # the fail-closed 404 shaping exists to deny.
+        if not admin_secret or not hmac.compare_digest(
+            supplied.encode("utf-8", "surrogatepass"), admin_secret.encode("utf-8", "surrogatepass"),
+        ):
             if admin_secret and supplied:
                 # A wrong guess is an active probe: burn a token from the same
                 # per-IP bucket as signaling abuse, and leave a trace.

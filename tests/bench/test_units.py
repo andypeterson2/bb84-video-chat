@@ -17,23 +17,22 @@ from bench.ws_protocol import (
 
 
 class TestPairing:
-    def test_verify_accepts_the_minted_token_and_marks_paired(self):
+    def test_verify_accepts_the_minted_token(self):
         p = Pairing()
-        assert not p.is_paired
         assert p.verify(p.token)
-        assert p.is_paired
 
     def test_wrong_token_is_refused(self):
         p = Pairing("known-token")
         assert not p.verify("guess")
         assert not p.verify(None)
-        assert not p.is_paired
 
-    def test_reset_drops_the_pairing(self):
-        p = Pairing()
-        p.verify(p.token)
-        p.reset()
-        assert not p.is_paired
+    def test_verify_is_stateless(self):
+        # The token holder carries no paired state, so nothing it stores can
+        # leak one connection's pairing to another. verify is a pure check.
+        p = Pairing("known-token")
+        assert p.verify("known-token")
+        assert not p.verify("wrong")
+        assert p.verify("known-token")
 
 
 class TestPacking:
