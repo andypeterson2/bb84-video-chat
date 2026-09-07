@@ -16,6 +16,80 @@ const ICE_SERVERS = [
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
 
+/**
+ * Opus fmtp parameters merged into every local SDP. Browsers negotiate Opus at
+ * a lowest-common-denominator default; these lift it to a clear 64 kbps mono
+ * voice (`maxaveragebitrate`) — stereo is deliberately left off, since a
+ * talking-head call is mono and stereo only spends bitrate — and add loss
+ * resilience (`useinbandfec`) and silence suppression (`usedtx`, which reclaims
+ * bandwidth when no one is talking). Values are written verbatim into the fmtp.
+ */
+export const OPUS_PARAMS = {
+  maxaveragebitrate: 64000,
+  useinbandfec: 1,
+  usedtx: 1,
+};
+
+/** Parse an fmtp value ("k=v;k2=v2") into an object; tolerant of stray spaces. */
+function parseFmtp(value) {
+  const out = {};
+  for (const pair of value.split(';')) {
+    const eq = pair.indexOf('=');
+    if (eq > 0) out[pair.slice(0, eq).trim()] = pair.slice(eq + 1).trim();
+  }
+  return out;
+}
+
+/** Opus payload types in an SDP, and which of them already carry an fmtp line. */
+function opusPayloadTypes(lines) {
+  const pts = new Set();
+  const withFmtp = new Set();
+  for (const line of lines) {
+    const rm = /^a=rtpmap:(\d+) opus\/48000/i.exec(line);
+    if (rm) pts.add(rm[1]);
+    const fm = /^a=fmtp:(\d+) /i.exec(line);
+    if (fm) withFmtp.add(fm[1]);
+  }
+  return { pts, withFmtp };
+}
+
+/**
+ * Merge {@link OPUS_PARAMS} into the Opus fmtp line(s) of an SDP blob without
+ * disturbing anything else. Pure string transform so it is unit-testable and
+ * runs identically on offer and answer. Existing fmtp params are preserved
+ * (ours win on a key clash); an Opus rtpmap with no fmtp line gets one minted.
+ * A no-op when the SDP carries no Opus (e.g. audio-less renegotiation).
+ * @param {string} sdp
+ * @param {Record<string, string|number>} [params]
+ * @returns {string}
+ */
+export function tuneOpus(sdp, params = OPUS_PARAMS) {
+  if (!sdp) return sdp;
+  const lines = sdp.split(/\r?\n/);
+  const { pts, withFmtp } = opusPayloadTypes(lines);
+  if (pts.size === 0) return sdp;
+
+  const render = (pt, existing) =>
+    `a=fmtp:${pt} ` +
+    Object.entries({ ...parseFmtp(existing), ...params })
+      .map(([k, v]) => `${k}=${v}`)
+      .join(';');
+
+  const out = [];
+  for (const line of lines) {
+    const fm = /^a=fmtp:(\d+) (.*)$/i.exec(line);
+    if (fm && pts.has(fm[1])) {
+      out.push(render(fm[1], fm[2])); // merge into the existing fmtp
+      continue;
+    }
+    out.push(line);
+    // An Opus rtpmap whose PT has no fmtp anywhere: mint one right after it.
+    const rm = /^a=rtpmap:(\d+) opus\/48000/i.exec(line);
+    if (rm && !withFmtp.has(rm[1])) out.push(render(rm[1], ''));
+  }
+  return out.join(sdp.includes('\r\n') ? '\r\n' : '\n');
+}
+
 /** Default capture constraints — real values, not bare booleans. `ideal` (not
  * `exact`) so a camera that can't do 1080p falls back gracefully instead of
  * failing getUserMedia; the QualityController lowers the live resolution. */
@@ -183,7 +257,7 @@ export class WebRTCManager {
         this._createDataChannel();
         this._addLocalTracks();
         const offer = await this._pc.createOffer();
-        await this._pc.setLocalDescription(offer);
+        await this._pc.setLocalDescription(this._tuned(offer));
         this._socket.emit('offer', { sdp: this._pc.localDescription });
       }
     });
@@ -201,7 +275,7 @@ export class WebRTCManager {
           try {
             await this._pc.setRemoteDescription(data.sdp);
             const answer = await this._pc.createAnswer();
-            await this._pc.setLocalDescription(answer);
+            await this._pc.setLocalDescription(this._tuned(answer));
             this._socket.emit('answer', { sdp: this._pc.localDescription });
           } catch (e) {
             console.warn('Failed to apply ICE-restart offer:', e);
@@ -217,7 +291,7 @@ export class WebRTCManager {
       this._addLocalTracks();
       await this._pc.setRemoteDescription(data.sdp);
       const answer = await this._pc.createAnswer();
-      await this._pc.setLocalDescription(answer);
+      await this._pc.setLocalDescription(this._tuned(answer));
       this._socket.emit('answer', { sdp: this._pc.localDescription });
     });
 
@@ -328,9 +402,26 @@ export class WebRTCManager {
       }
       if (track.kind === 'video') {
         this._videoSender = sender;
+        // A talking-head call is motion, not still detail: this biases the
+        // encoder toward temporal smoothness over per-frame resolution when it
+        // has to choose. Harmless if the UA ignores the hint.
+        try {
+          track.contentHint = 'motion';
+        } catch {
+          /* contentHint unsupported — encoder heuristics apply */
+        }
         this._applyEncoderParams(sender);
       }
     }
+  }
+
+  /**
+   * Return a local-description init with Opus tuned in. `pc.localDescription`
+   * reflects exactly what setLocalDescription was given, so the emitted SDP
+   * carries the tuning without a second read. @private
+   */
+  _tuned(desc) {
+    return { type: desc.type, sdp: tuneOpus(desc.sdp) };
   }
 
   /**
@@ -414,7 +505,7 @@ export class WebRTCManager {
     this._restarting = true;
     try {
       const offer = await this._pc.createOffer({ iceRestart: true });
-      await this._pc.setLocalDescription(offer);
+      await this._pc.setLocalDescription(this._tuned(offer));
       this._socket.emit('offer', { sdp: this._pc.localDescription, iceRestart: true });
     } catch (e) {
       console.warn('ICE restart failed:', e);
