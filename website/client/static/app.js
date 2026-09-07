@@ -45,6 +45,7 @@ const state = {
   optical: { enabled: false, url: 'ws://127.0.0.1:8781', token: '' },
   opticalStatus: '', // pairing feedback shown in the optical settings row
   quality: null, // adaptive-quality telemetry {tier, bandwidthKbps, rttMs, limitedBy, ...}
+  cryptoMetrics: null, // per-frame encrypt/decrypt latency from the crypto worker (1/s)
   mediaError: '', // camera/mic permission failure, shown inline in the lobby
   sasVerified: false, // user compared the SAS on camera and confirmed it matches
   joining: false, // Join clicked, waiting for the peer connection to establish
@@ -249,6 +250,12 @@ function connectToSignaling(url) {
     // failures during a re-key is normal; a sustained stream is not.
     webrtcManager.on('decrypt-error', (msg) => {
       console.warn(`Frame decrypt failures in the last interval: ${msg.failures ?? 1}`);
+    });
+    // Per-frame encrypt/decrypt latency, aggregated 1/s by the worker. Stored
+    // for the diagnostics line; no render() here — it's picked up on the next
+    // quality-driven render (every 2s), which is plenty for a readout.
+    webrtcManager.on('crypto-metrics', (msg) => {
+      state.cryptoMetrics = msg;
     });
   });
 }
@@ -458,6 +465,32 @@ function modeBadge() {
 function distillFraction() {
   if (!state.mintBudget || state.mintBudget <= 0) return 0;
   return Math.min(1, state.reservoirBits / state.mintBudget);
+}
+
+/**
+ * A compact live media-diagnostics line: the adaptive tier, the browser's own
+ * bandwidth estimate, RTT, what is currently capping quality (bandwidth/cpu —
+ * the throughput limiter), and per-frame encrypt/decrypt time from the crypto
+ * worker. Empty until the first telemetry arrives. This is what makes the
+ * throughput bottleneck observable rather than guessed.
+ */
+function netDiagLine() {
+  const q = state.quality;
+  const c = state.cryptoMetrics;
+  const parts = [];
+  if (q) {
+    if (q.tier) parts.push(`Tier ${q.tier}`);
+    if (q.bandwidthKbps != null) parts.push(`${q.bandwidthKbps.toLocaleString()} kbps est`);
+    if (q.rttMs != null) parts.push(`${q.rttMs} ms RTT`);
+    if (q.limitedBy && q.limitedBy !== 'none') parts.push(`limited by ${q.limitedBy}`);
+  }
+  if (c && (c.encryptLatencyUs || c.decryptLatencyUs)) {
+    const enc = c.encryptLatencyUs ? Math.round(c.encryptLatencyUs) : '–';
+    const dec = c.decryptLatencyUs ? Math.round(c.decryptLatencyUs) : '–';
+    parts.push(`crypto ${enc}/${dec} µs`);
+  }
+  if (parts.length === 0) return '';
+  return `<div class="qd-diag" title="Live media diagnostics — adaptive tier, the browser's own send-bandwidth estimate, round-trip time, what is capping quality (bandwidth or CPU), and per-frame encrypt/decrypt time.">${parts.join(' · ')}</div>`;
 }
 
 /**
@@ -965,6 +998,7 @@ function render() {
               <div class="qd-metric" title="Keys buffered and ready to rotate in."><span class="qd-metric-value">${state.poolDepth}</span><span class="qd-metric-label">Pool</span></div>
             </div>
             <canvas id="qd-chart" class="qd-chart"></canvas>
+            ${netDiagLine()}
             ${state.isInitiator ? `<button class="qd-eve-btn ${state.eavesdropper ? 'qd-eve-btn--active' : ''}" onclick="toggleEavesdropper()">${state.eavesdropper ? 'Eavesdropper active — click to remove' : 'Simulate eavesdropper'}</button>` : ''}
           </div>`
                 : ''

@@ -132,11 +132,21 @@ export function decodeHeader(view) {
   return { kid, ctr, isKey, headerLen: off + ctrLen };
 }
 
-/** Per-frame nonce: the epoch salt XOR the 96-bit big-endian counter. */
+/**
+ * Per-frame nonce: the epoch salt XOR the 96-bit big-endian counter. Runs once
+ * per frame (30-60 fps × 2 directions), so the counter is XOR'd in place from
+ * the low byte up rather than materializing a second 12-byte array — identical
+ * result to `salt XOR writeUint(ctr, 12)`, one allocation instead of two. The
+ * salt copy stays (the epoch salt must never be mutated). `% 256` (not `& 0xff`)
+ * because a counter can exceed 32 bits, where bitwise AND would truncate.
+ */
 export function nonceFor(salt, ctr) {
   const nonce = salt.slice(0, 12);
-  const ctrBE = writeUint(ctr, 12);
-  for (let i = 0; i < 12; i++) nonce[i] ^= ctrBE[i];
+  let x = ctr;
+  for (let i = 11; i >= 0; i--) {
+    nonce[i] ^= x % 256;
+    x = Math.floor(x / 256);
+  }
   return nonce;
 }
 

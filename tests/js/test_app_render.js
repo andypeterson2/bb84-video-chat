@@ -198,6 +198,30 @@ describe('cipher pill', () => {
     expect(document.querySelector('.qd-body')).not.toBeNull();
   });
 
+  test('the diagnostics line surfaces the throughput limiter and crypto latency', () => {
+    app.state.peerConnected = true;
+    app.state.bb84Active = true;
+    app.state.dashboardExpanded = true;
+    app.state.quality = { tier: 'Full HD', bandwidthKbps: 5200, rttMs: 42, limitedBy: 'cpu' };
+    app.state.cryptoMetrics = { encryptLatencyUs: 47, decryptLatencyUs: 39 };
+    app.render();
+    const diag = document.querySelector('.qd-diag');
+    expect(diag).not.toBeNull();
+    expect(diag.textContent).toContain('Full HD');
+    expect(diag.textContent).toContain('limited by cpu');
+    expect(diag.textContent).toContain('47/39');
+  });
+
+  test('the diagnostics line is absent before any telemetry arrives', () => {
+    app.state.peerConnected = true;
+    app.state.bb84Active = true;
+    app.state.dashboardExpanded = true;
+    app.state.quality = null;
+    app.state.cryptoMetrics = null;
+    app.render();
+    expect(document.querySelector('.qd-diag')).toBeNull();
+  });
+
   test('the mode badge reads SIMULATED until an optical backend negotiates', () => {
     app.state.peerConnected = true;
     app.state.bb84Active = true;
