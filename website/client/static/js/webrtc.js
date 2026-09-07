@@ -17,16 +17,15 @@ const ICE_SERVERS = [
 ];
 
 /**
- * Opus fmtp parameters merged into every local SDP. Defaults leave Opus at
- * ~32 kbps mono with no FEC/DTX; these lift it to full-band stereo music-grade
- * audio (`maxaveragebitrate`/`stereo`) and add loss resilience (`useinbandfec`)
- * and silence suppression (`usedtx`, which reclaims bandwidth when no one is
- * talking). Values are strings/numbers written verbatim into the fmtp line.
+ * Opus fmtp parameters merged into every local SDP. Browsers negotiate Opus at
+ * a lowest-common-denominator default; these lift it to a clear 64 kbps mono
+ * voice (`maxaveragebitrate`) — stereo is deliberately left off, since a
+ * talking-head call is mono and stereo only spends bitrate — and add loss
+ * resilience (`useinbandfec`) and silence suppression (`usedtx`, which reclaims
+ * bandwidth when no one is talking). Values are written verbatim into the fmtp.
  */
 export const OPUS_PARAMS = {
-  maxaveragebitrate: 128000,
-  stereo: 1,
-  'sprop-stereo': 1,
+  maxaveragebitrate: 64000,
   useinbandfec: 1,
   usedtx: 1,
 };

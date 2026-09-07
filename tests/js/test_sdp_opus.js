@@ -32,11 +32,11 @@ test('merges the quality params into an existing Opus fmtp, preserving its other
   // Pre-existing param survives...
   expect(params.minptime).toBe('10');
   // ...and every quality param is present.
-  expect(params.maxaveragebitrate).toBe('128000');
-  expect(params.stereo).toBe('1');
-  expect(params['sprop-stereo']).toBe('1');
+  expect(params.maxaveragebitrate).toBe('64000');
   expect(params.useinbandfec).toBe('1');
   expect(params.usedtx).toBe('1');
+  // Stereo is deliberately NOT forced — a talking-head call is mono.
+  expect(params.stereo).toBeUndefined();
 });
 
 test('mints an fmtp line when the Opus rtpmap has none', () => {
@@ -46,7 +46,7 @@ test('mints an fmtp line when the Opus rtpmap has none', () => {
   const rtpmapIdx = lines.findIndex((l) => l === 'a=rtpmap:111 opus/48000/2');
   // The minted fmtp lands immediately after the rtpmap it belongs to.
   expect(lines[rtpmapIdx + 1]).toContain('a=fmtp:111 ');
-  expect(lines[rtpmapIdx + 1]).toContain('maxaveragebitrate=128000');
+  expect(lines[rtpmapIdx + 1]).toContain('maxaveragebitrate=64000');
 });
 
 test('does not duplicate: exactly one fmtp line for the Opus PT', () => {
@@ -85,11 +85,11 @@ test('empty / falsy SDP is returned unchanged', () => {
   expect(tuneOpus(undefined)).toBe(undefined);
 });
 
-test('OPUS_PARAMS documents the intent (stereo, 128k, fec, dtx)', () => {
+test('OPUS_PARAMS documents the intent (64k mono, fec, dtx — no stereo)', () => {
   expect(OPUS_PARAMS).toMatchObject({
-    maxaveragebitrate: 128000,
-    stereo: 1,
+    maxaveragebitrate: 64000,
     useinbandfec: 1,
     usedtx: 1,
   });
+  expect(OPUS_PARAMS.stereo).toBeUndefined();
 });
