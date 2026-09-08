@@ -366,3 +366,61 @@ body {
     transition: none;
   }
 }
+
+/* ── Key-pipeline hero ──────────────────────────────────────────── */
+.an-hero {
+  background: var(--card-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.an-hero h2 {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+.an-pipeline {
+  width: 100%;
+  height: 150px;
+  display: block;
+}
+[data-density='presentation'] .an-pipeline {
+  height: 210px;
+}
+
+/* ── Guided eavesdropper callout ────────────────────────────────── */
+.an-callout {
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+.an-callout-alarm {
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+.an-callout-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--warning);
+  margin-bottom: 3px;
+}
+.an-callout-alarm .an-callout-title {
+  color: var(--error);
+}
+.an-callout-body {
+  font-size: 0.84rem;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+[data-density='presentation'] .an-callout-title {
+  font-size: 1.15rem;
+}
+[data-density='presentation'] .an-callout-body {
+  font-size: 1rem;
+}
