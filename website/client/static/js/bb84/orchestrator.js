@@ -59,6 +59,12 @@ export class BB84Orchestrator {
     if (this._engine) this._engine.setEavesdropper(this._eavesdropper);
   }
 
+  /** Rotate the next pooled key in immediately, bypassing the rotation floor.
+   * Demo affordance; no-op before the engine exists or when no key is pending. */
+  forceRotate() {
+    if (this._engine) this._engine.forceRotate();
+  }
+
   /**
    * Declare a hardware bench backend for this call. Wired by app.js from the
    * optical-mode settings; absent ⇒ the simulated (loopback) backend.

@@ -289,6 +289,22 @@ export class ReservoirEngine {
     }
   }
 
+  /**
+   * Install the next pooled key immediately, bypassing the rotation-floor wait.
+   * Demo affordance only — normal rotation is floored at ROTATION_FLOOR_MS so a
+   * fast-minting reservoir doesn't churn the cipher. No-op when no key is
+   * pending or the engine is torn down/latched; otherwise it clears the pending
+   * timer, zeroes the floor, and reschedules so the install fires now (still via
+   * the normal path, so it emits phase:'rotated' exactly once).
+   */
+  forceRotate() {
+    if (this._destroyed || this._exhausted || this._pendingKeys.length === 0) return;
+    clearTimeout(this._installTimer);
+    this._installTimer = null;
+    this._lastInstallAt = -Infinity; // wait collapses to 0 in _scheduleInstall
+    this._scheduleInstall();
+  }
+
   destroy() {
     this._destroyed = true;
     clearTimeout(this._installTimer);

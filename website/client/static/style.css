@@ -1136,3 +1136,26 @@ input {
 .qd-body {
   padding-top: 10px;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Analytics launch control (opens the second-window demo screen).
+   ═════════════════════════════════════════════════════════════════════════ */
+.analytics-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: var(--btn-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.analytics-btn:hover {
+  background: var(--btn-bg-hover);
+  border-color: var(--accent);
+}

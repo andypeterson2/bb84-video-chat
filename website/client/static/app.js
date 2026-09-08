@@ -83,6 +83,14 @@ let benchConnection = null; // live DaemonConnection while optical mode is armed
 let qualityController = null; // adaptive bitrate/resolution while a call is up
 let QualityControllerCls = null; // resolved from the dynamic import
 
+// Analytics telemetry bus (second-window demo screen). All resolved from the
+// dynamic import in init; null until then and on browsers without BroadcastChannel.
+let telemetryBus = null; // BroadcastChannel('qvc-analytics')
+let telemetryTimer = null; // 250ms coalesced publisher while a call is up
+let eventLog = null; // EventLog instance (timeline ring buffer)
+let buildSnapshot = null; // buildTelemetrySnapshot
+let EVENT = {}; // EVENT_KINDS (empty until telemetry.js loads)
+
 /* ── Icons ──────────────────────────────────────────────────────── */
 const ICONS = {
   cameraOn:
@@ -95,6 +103,8 @@ const ICONS = {
     '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="8" y="2" width="8" height="12"/><path d="M4 10v1a8 8 0 0016 0v-1"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="2" y1="3" x2="22" y2="21" stroke-width="2"/></svg>',
   phoneOff:
     '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.68 13.31a16 16 0 003.41 2.6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 004.05.7 2 2 0 011.98 2v3.5a2 2 0 01-2.18 2A19.79 19.79 0 013.07 4.18 2 2 0 015.07 2H8.6a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L9.58 9.91"/><line x1="2" y1="2" x2="22" y2="22" stroke-width="2"/></svg>',
+  analytics:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 2 4-6"/></svg>',
 };
 
 /* ── Signaling ──────────────────────────────────────────────────── */
@@ -140,124 +150,142 @@ function connectToSignaling(url) {
     import('./js/webrtc.js'),
     import('./js/bb84/orchestrator.js'),
     import('./js/quality.js'),
-  ]).then(async ([{ WebRTCManager }, { BB84Orchestrator }, { QualityController }]) => {
-    QualityControllerCls = QualityController;
-    // ICE servers (STUN + short-lived TURN) come from the signaling backend so
-    // relay credentials stay short-lived and no long-lived secret ships to the
-    // client. Fetched before the manager so the first PeerConnection has them.
-    const iceServers = await fetchIceServers(url);
-    // Attach the Insertable Streams transforms up front. The crypto worker is
-    // FAIL-CLOSED: it drops every frame until BB84 delivers a key, then encrypts
-    // with no renegotiation. (Constructing with `false` never created the worker
-    // at all, so a derived key had nowhere to go — encryption never engaged.)
-    webrtcManager = new WebRTCManager(socket, { enableEncryption: true, iceServers });
+    import('./js/analytics/telemetry.js'),
+  ]).then(
+    async ([
+      { WebRTCManager },
+      { BB84Orchestrator },
+      { QualityController },
+      { buildTelemetrySnapshot, EventLog, EVENT_KINDS, isValidCommand, TELEMETRY_CHANNEL },
+    ]) => {
+      QualityControllerCls = QualityController;
+      // Wire the analytics telemetry bus (a second-window demo screen listens).
+      buildSnapshot = buildTelemetrySnapshot;
+      eventLog = new EventLog(100);
+      EVENT = EVENT_KINDS;
+      setupTelemetryBus(TELEMETRY_CHANNEL, isValidCommand);
+      // ICE servers (STUN + short-lived TURN) come from the signaling backend so
+      // relay credentials stay short-lived and no long-lived secret ships to the
+      // client. Fetched before the manager so the first PeerConnection has them.
+      const iceServers = await fetchIceServers(url);
+      // Attach the Insertable Streams transforms up front. The crypto worker is
+      // FAIL-CLOSED: it drops every frame until BB84 delivers a key, then encrypts
+      // with no renegotiation. (Constructing with `false` never created the worker
+      // at all, so a derived key had nowhere to go — encryption never engaged.)
+      webrtcManager = new WebRTCManager(socket, { enableEncryption: true, iceServers });
 
-    bb84 = new BB84Orchestrator({
-      webrtcManager,
-      onStateChange: handleBB84State,
-    });
+      bb84 = new BB84Orchestrator({
+        webrtcManager,
+        onStateChange: handleBB84State,
+      });
 
-    webrtcManager.on('room-created', (d) => {
-      state.roomId = d.room_id;
-      // The room id is an unguessable capability token: the invite link IS
-      // the credential. It travels in the fragment so it never reaches
-      // server logs or Referer headers.
-      state.joinLink = `${window.location.origin}${window.location.pathname}#room=${encodeURIComponent(d.room_id)}`;
-      state.waitingForPeer = true;
-      render();
-    });
-    webrtcManager.on('room-joined', async (d) => {
-      state.roomId = d.room_id || state.roomId;
-      state.waitingForPeer = false;
-      if (!localStream) {
-        localStream = await webrtcManager.getLocalMedia();
-        showLocalVideo(localStream);
-      }
-    });
-    webrtcManager.on('remote-stream', (d) => {
-      state.peerConnected = true;
-      state.joining = false;
-      state.reconnecting = false;
-      state.elapsed = 0;
-      startTimer();
-      showRemoteVideo(d.stream);
-      startQualityController();
-      render();
-    });
-    webrtcManager.on('data-channel-open', () => {
-      state.bb84Active = true;
-      render();
-      // The optical bench (if any) was already paired at create/join time,
-      // OFF this handshake path — a variable-latency pairing here would let
-      // the peer's early fingerprint messages arrive before init() built the
-      // mux, and they would be dropped. init() must run promptly so both
-      // sides' muxes exist before either sends. init() starts continuous
-      // streaming itself; a rejection means the secure-channel bootstrap
-      // failed before any streaming, so surface it loudly.
-      bb84.init({ roomToken: state.roomId, isInitiator: state.isInitiator }).catch(() => {
-        state.cipherState = 'compromised';
-        showToast('Secure-channel setup failed — no key will be established.', 'error');
+      webrtcManager.on('room-created', (d) => {
+        state.roomId = d.room_id;
+        // The room id is an unguessable capability token: the invite link IS
+        // the credential. It travels in the fragment so it never reaches
+        // server logs or Referer headers.
+        state.joinLink = `${window.location.origin}${window.location.pathname}#room=${encodeURIComponent(d.room_id)}`;
+        state.waitingForPeer = true;
         render();
       });
-    });
-    webrtcManager.on('data-channel-message', (d) => bb84.handleMessage(d));
-    webrtcManager.on('peer-disconnected', () => {
-      resetSession();
-      render();
-      showToast('Your partner left the call.', 'info');
-    });
-    webrtcManager.on('error', (d) => showToast(d.message || 'Something went wrong.', 'error'));
-    webrtcManager.on('state-change', (d) => {
-      // Keep the user in-call across a transient ICE blip — webrtc.js attempts
-      // an ICE restart — and show a reconnecting indicator rather than dumping
-      // back to the lobby. Only an explicit leave / peer-disconnect tears down.
-      if (d.state === 'connected' || d.state === 'completed') {
+      webrtcManager.on('room-joined', async (d) => {
+        state.roomId = d.room_id || state.roomId;
+        state.waitingForPeer = false;
+        if (!localStream) {
+          localStream = await webrtcManager.getLocalMedia();
+          showLocalVideo(localStream);
+        }
+      });
+      webrtcManager.on('remote-stream', (d) => {
         state.peerConnected = true;
+        state.joining = false;
         state.reconnecting = false;
-      } else if ((d.state === 'disconnected' || d.state === 'failed') && state.peerConnected) {
-        state.reconnecting = true;
-      }
-      render();
-    });
-    // The other peer toggled the eavesdropper demo — surface it so the joiner
-    // (who has no toggle) doesn't read the QBER spike as a real attack.
-    socket.on('eve-demo', (d) => {
-      state.peerEavesdropping = !!(d && d.active);
-      render();
-    });
-    webrtcManager.on('cipher-state', (msg) => {
-      if (msg.state === 'encrypting') {
-        state.cipherState = 'encrypted';
-        state.keyIndex = msg.keyIndex;
-      } else if (msg.state === 'worker-error') {
-        state.cipherState = 'unencrypted';
-        showToast('Encryption worker failed — media is blocked, not sent in the clear.');
-      } else if (msg.state === 'unsupported') {
-        // This browser has no RTCRtpScriptTransform: frames CANNOT be
-        // encrypted, and pretending otherwise is exactly the lie the
-        // fail-closed design exists to prevent.
-        state.cipherState = 'unsupported';
-        showToast('This browser cannot encrypt media frames — no key will be used.');
-      } else if (msg.state === 'keyless') {
-        // The worker is dropping frames. Before the first key that is the
-        // normal establishing window; after one it means the keyed worker
-        // was replaced — a downgrade, shown loudly.
-        state.cipherState = hasBeenEncrypted() ? 'unencrypted' : 'establishing';
-      }
-      render();
-    });
-    // Aggregated by the worker (at most one message per second). A burst of
-    // failures during a re-key is normal; a sustained stream is not.
-    webrtcManager.on('decrypt-error', (msg) => {
-      console.warn(`Frame decrypt failures in the last interval: ${msg.failures ?? 1}`);
-    });
-    // Per-frame encrypt/decrypt latency, aggregated 1/s by the worker. Stored
-    // for the diagnostics line; no render() here — it's picked up on the next
-    // quality-driven render (every 2s), which is plenty for a readout.
-    webrtcManager.on('crypto-metrics', (msg) => {
-      state.cryptoMetrics = msg;
-    });
-  });
+        state.elapsed = 0;
+        startTimer();
+        showRemoteVideo(d.stream);
+        startQualityController();
+        startTelemetryPublisher();
+        logEvent(EVENT.callStart);
+        render();
+      });
+      webrtcManager.on('data-channel-open', () => {
+        state.bb84Active = true;
+        render();
+        // The optical bench (if any) was already paired at create/join time,
+        // OFF this handshake path — a variable-latency pairing here would let
+        // the peer's early fingerprint messages arrive before init() built the
+        // mux, and they would be dropped. init() must run promptly so both
+        // sides' muxes exist before either sends. init() starts continuous
+        // streaming itself; a rejection means the secure-channel bootstrap
+        // failed before any streaming, so surface it loudly.
+        bb84.init({ roomToken: state.roomId, isInitiator: state.isInitiator }).catch(() => {
+          state.cipherState = 'compromised';
+          showToast('Secure-channel setup failed — no key will be established.', 'error');
+          render();
+        });
+      });
+      webrtcManager.on('data-channel-message', (d) => bb84.handleMessage(d));
+      webrtcManager.on('peer-disconnected', () => {
+        resetSession();
+        render();
+        showToast('Your partner left the call.', 'info');
+      });
+      webrtcManager.on('error', (d) => showToast(d.message || 'Something went wrong.', 'error'));
+      webrtcManager.on('state-change', (d) => {
+        // Keep the user in-call across a transient ICE blip — webrtc.js attempts
+        // an ICE restart — and show a reconnecting indicator rather than dumping
+        // back to the lobby. Only an explicit leave / peer-disconnect tears down.
+        if (d.state === 'connected' || d.state === 'completed') {
+          if (state.reconnecting) logEvent(EVENT.recovered);
+          state.peerConnected = true;
+          state.reconnecting = false;
+        } else if ((d.state === 'disconnected' || d.state === 'failed') && state.peerConnected) {
+          if (!state.reconnecting) logEvent(EVENT.reconnect);
+          state.reconnecting = true;
+        }
+        render();
+      });
+      // The other peer toggled the eavesdropper demo — surface it so the joiner
+      // (who has no toggle) doesn't read the QBER spike as a real attack.
+      socket.on('eve-demo', (d) => {
+        state.peerEavesdropping = !!(d && d.active);
+        logEvent(EVENT.peerEve, { active: state.peerEavesdropping });
+        render();
+      });
+      webrtcManager.on('cipher-state', (msg) => {
+        if (msg.state === 'encrypting') {
+          state.cipherState = 'encrypted';
+          state.keyIndex = msg.keyIndex;
+        } else if (msg.state === 'worker-error') {
+          state.cipherState = 'unencrypted';
+          showToast('Encryption worker failed — media is blocked, not sent in the clear.');
+        } else if (msg.state === 'unsupported') {
+          // This browser has no RTCRtpScriptTransform: frames CANNOT be
+          // encrypted, and pretending otherwise is exactly the lie the
+          // fail-closed design exists to prevent.
+          state.cipherState = 'unsupported';
+          showToast('This browser cannot encrypt media frames — no key will be used.');
+        } else if (msg.state === 'keyless') {
+          // The worker is dropping frames. Before the first key that is the
+          // normal establishing window; after one it means the keyed worker
+          // was replaced — a downgrade, shown loudly.
+          state.cipherState = hasBeenEncrypted() ? 'unencrypted' : 'establishing';
+        }
+        render();
+      });
+      // Aggregated by the worker (at most one message per second). A burst of
+      // failures during a re-key is normal; a sustained stream is not.
+      webrtcManager.on('decrypt-error', (msg) => {
+        console.warn(`Frame decrypt failures in the last interval: ${msg.failures ?? 1}`);
+      });
+      // Per-frame encrypt/decrypt latency, aggregated 1/s by the worker. Stored
+      // for the diagnostics line; no render() here — it's picked up on the next
+      // quality-driven render (every 2s), which is plenty for a readout.
+      webrtcManager.on('crypto-metrics', (msg) => {
+        state.cryptoMetrics = msg;
+      });
+    },
+  );
 }
 
 /* ── BB84 ───────────────────────────────────────────────────────── */
@@ -275,6 +303,7 @@ function handleBB84State(s) {
       break;
     case 'mode':
       state.mode = s.mode;
+      logEvent(EVENT.mode, { mode: s.mode });
       if (s.mode !== 'optical' && benchConnection) {
         // Negotiation fell back to the simulator (the peer had no
         // complementary bench). Drop the daemon connection we won't use.
@@ -299,10 +328,12 @@ function handleBB84State(s) {
       state.keysMinted++;
       state.keyIndex = s.keyIndex;
       state.poolDepth = s.poolDepth ?? state.poolDepth;
+      logEvent(EVENT.minted, { keyIndex: s.keyIndex });
       break;
     case 'rotated':
       state.rotations++;
       state.poolDepth = s.poolDepth ?? state.poolDepth;
+      logEvent(EVENT.rotated, { keyIndex: s.keyIndex });
       break;
     case 'failed':
       handleReservoirFailure(s);
@@ -312,6 +343,7 @@ function handleBB84State(s) {
       // worker never downgrades), but no fresh key is obtainable — show it
       // red and leave the decision to the user.
       state.cipherState = 'compromised';
+      logEvent(EVENT.compromised);
       showToast('Channel integrity lost — tampering or a persistent fault. Leave and retry.');
       break;
     default:
@@ -328,6 +360,7 @@ function handleReservoirFailure(s) {
       state.qberHistory.push(s.qber);
       if (state.qberHistory.length > QBER_HISTORY_CAP) state.qberHistory.shift();
     }
+    logEvent(EVENT.qberAbort, { qber: s.qber ?? null });
     showToast('QBER above the 11% threshold — frame rejected.');
   } else if (s.reason === 'setup') {
     state.cipherState = 'compromised';
@@ -503,6 +536,7 @@ function toggleEavesdropper() {
   if (!bb84) return;
   state.eavesdropper = !state.eavesdropper;
   bb84.setEavesdropper(state.eavesdropper);
+  logEvent(EVENT.eve, { active: state.eavesdropper });
   // Tell the peer this is a demo, so their QBER spike comes with an explanation.
   if (socket) socket.emit('eve_demo', { active: state.eavesdropper });
   showToast(
@@ -699,6 +733,7 @@ function toggleDashboard() {
 /** The user compared the SAS on camera and it MATCHES — mark the call verified. */
 function handleSasVerify() {
   state.sasVerified = true;
+  logEvent(EVENT.sasVerified);
   showToast('Identity verified — this call is end-to-end secure.', 'success');
   render();
 }
@@ -743,8 +778,101 @@ function stopQualityController() {
   state.quality = null;
 }
 
+/* ── Analytics telemetry bus (second-window demo screen) ─────────── */
+
+/** Wire the BroadcastChannel: publish snapshots out, accept demo commands in. */
+function setupTelemetryBus(channelName, isValidCommand) {
+  if (typeof BroadcastChannel === 'undefined') return; // older browser: no feed
+  telemetryBus = new BroadcastChannel(channelName);
+  telemetryBus.onmessage = (e) => {
+    if (isValidCommand(e.data)) handleAnalyticsCommand(e.data.cmd);
+  };
+}
+
+/** Publish one live telemetry snapshot (real data only; no-op before wiring). */
+function publishTelemetry() {
+  if (!telemetryBus || !buildSnapshot) return;
+  const snap = buildSnapshot(state, {
+    fingerprints: webrtcManager ? webrtcManager.getDtlsFingerprints() : null,
+    events: eventLog ? eventLog.tail() : [],
+    qberThreshold: QBER_THRESHOLD,
+    qberWarning: QBER_WARNING,
+  });
+  try {
+    telemetryBus.postMessage(snap);
+  } catch {
+    /* structured-clone failure — skip this tick */
+  }
+}
+
+/** Record a timeline event and publish immediately so the timeline is prompt. */
+function logEvent(kind, detail = null) {
+  if (eventLog) eventLog.log(kind, detail);
+  publishTelemetry();
+}
+
+/** Coalesced ~4/s publisher while a call is up (events publish on their own). */
+function startTelemetryPublisher() {
+  if (telemetryTimer || !telemetryBus) return;
+  publishTelemetry();
+  telemetryTimer = setInterval(publishTelemetry, 250);
+}
+
+function stopTelemetryPublisher() {
+  if (telemetryTimer) {
+    clearInterval(telemetryTimer);
+    telemetryTimer = null;
+  }
+  publishTelemetry(); // one final snapshot — inCall is now false → live panels clear
+}
+
+/**
+ * Publish a post-call summary snapshot from the still-populated state, flagged
+ * so the analytics window latches it while its live panels reset. Called at the
+ * top of resetSession, before the counters are zeroed.
+ */
+function publishCallSummary() {
+  if (!telemetryBus || !buildSnapshot) return;
+  const snap = buildSnapshot(state, {
+    fingerprints: webrtcManager ? webrtcManager.getDtlsFingerprints() : null,
+    events: eventLog ? eventLog.tail() : [],
+    qberThreshold: QBER_THRESHOLD,
+    qberWarning: QBER_WARNING,
+  });
+  snap.inCall = false;
+  snap.summary = true;
+  try {
+    telemetryBus.postMessage(snap);
+  } catch {
+    /* skip */
+  }
+}
+
+/** Apply an allowlisted demo command from the analytics window. */
+function handleAnalyticsCommand(cmd) {
+  if (cmd === 'toggle-eve') {
+    // Mirror the in-call UI gate: the eavesdropper toggle is initiator-only.
+    if (state.isInitiator) toggleEavesdropper();
+  } else if (cmd === 'force-rotate') {
+    if (bb84) bb84.forceRotate();
+  } else if (cmd === 'reset') {
+    handleLeave();
+  }
+}
+
+/** Open the analytics screen in its own window (fed live over the bus). */
+function openAnalytics() {
+  window.open('analytics.html', 'qvc-analytics', 'width=1280,height=860');
+}
+
 function resetSession() {
   stopQualityController();
+  // Emit the post-call summary while the totals are still populated, then let
+  // the publisher stop (which clears the analytics window's live panels).
+  if (state.peerConnected) {
+    logEvent(EVENT.callEnd);
+    publishCallSummary();
+  }
   if (bb84) bb84.destroy();
   if (benchConnection) {
     benchConnection.close();
@@ -774,6 +902,8 @@ function resetSession() {
   state.reconnecting = false;
   state.peerEavesdropping = false;
   stopTimer();
+  stopTelemetryPublisher();
+  if (eventLog) eventLog.clear();
   clearRemoteVideo();
   // Release the camera/mic so the indicator light goes off after the call.
   if (localStream) {
@@ -863,7 +993,10 @@ function render() {
     app.innerHTML = `
       <div class="header">
         <h1>QKD Video Chat</h1>
-        <div class="status"><span class="dot ${state.signalingConnected ? 'dot--ok' : 'dot--off'}"></span>${state.signalingConnected ? 'Connected' : 'Offline'}</div>
+        <div class="header-right">
+          <button class="analytics-btn" onclick="openAnalytics()" title="Open the live analytics screen in a new window">${ICONS.analytics}<span>Analytics</span></button>
+          <div class="status"><span class="dot ${state.signalingConnected ? 'dot--ok' : 'dot--off'}"></span>${state.signalingConnected ? 'Connected' : 'Offline'}</div>
+        </div>
       </div>
       <div class="lobby">
         <div class="lobby-card">
@@ -1009,6 +1142,7 @@ function render() {
         <div class="toolbar">
           <button class="media-btn ${state.cameraOn ? '' : 'media-btn--off'}" onclick="toggleCamera()">${state.cameraOn ? ICONS.cameraOn : ICONS.cameraOff}</button>
           <button class="media-btn ${state.muted ? 'media-btn--off' : ''}" onclick="toggleMute()">${state.muted ? ICONS.micOff : ICONS.micOn}</button>
+          <button class="media-btn" onclick="openAnalytics()" title="Open the live analytics screen in a new window">${ICONS.analytics}</button>
           <button class="btn btn--danger" onclick="handleLeave()">${ICONS.phoneOff} Leave</button>
         </div>
       </div>
@@ -1057,3 +1191,4 @@ window.handleSasVerify = handleSasVerify;
 window.handleSasMismatch = handleSasMismatch;
 window.toggleOptical = toggleOptical;
 window.setOpticalField = setOpticalField;
+window.openAnalytics = openAnalytics;
