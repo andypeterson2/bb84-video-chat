@@ -1,0 +1,368 @@
+/* Analytics screen (second-window demo dashboard). Built on the same
+   institutional UCSD tokens as the call app; light default, navy dark. Two
+   densities: compact (lean-in) and presentation (projector-grade). */
+
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+
+:root {
+  --body-font: 'Source Sans 3', system-ui, -apple-system, sans-serif;
+  --bg-base: #ffffff;
+  --bg-surface: #f7f4ec;
+  --text-primary: #182b49;
+  --text-muted: #5c6675;
+  --accent: #00629b;
+  --accent-teal: #007b8a;
+  --accent-olive: #6e963b;
+  --accent-brown: #c69214;
+  --highlight: #ffcd00;
+  --error: #c0362c;
+  --success: #5e8233;
+  --warning: #b96b06;
+  --border-subtle: #e5e0d4;
+  --card-bg: #f7f4ec;
+  --radius: 8px;
+  --shadow: 0 1px 2px rgba(24, 43, 73, 0.06), 0 10px 26px rgba(24, 43, 73, 0.07);
+}
+:root[data-theme='dark'] {
+  --bg-base: #0d1826;
+  --bg-surface: #14263c;
+  --text-primary: #e6ebf2;
+  --text-muted: #93a1b5;
+  --accent: #4aa3d6;
+  --accent-teal: #35b8c9;
+  --accent-olive: #9ac45f;
+  --accent-brown: #e0b552;
+  --error: #e5776b;
+  --success: #9ac45f;
+  --warning: #f2a24a;
+  --border-subtle: #263a52;
+  --card-bg: #14263c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 30px rgba(0, 0, 0, 0.38);
+}
+
+* {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--body-font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+#analytics-root {
+  padding: 20px 24px 32px;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+.an-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 14px;
+  margin-bottom: 20px;
+}
+.an-header h1 {
+  font-size: 1.4rem;
+  margin: 0;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.an-status {
+  flex: 1;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.an-flag {
+  color: var(--error);
+  font-weight: 600;
+}
+.an-controls {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.an-controls button {
+  font-family: var(--body-font);
+  font-size: 0.82rem;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.an-controls button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.an-controls button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Empty state ────────────────────────────────────────────────── */
+.an-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 90px 0;
+  font-size: 1.05rem;
+}
+
+/* ── Panel grid ─────────────────────────────────────────────────── */
+.an-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.an-panel,
+.an-summary {
+  background: var(--card-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+}
+.an-panel-wide {
+  grid-column: 1 / -1;
+}
+.an-panel h2,
+.an-summary h2 {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── Tiles ──────────────────────────────────────────────────────── */
+.an-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 12px;
+}
+.an-k {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.an-v {
+  font-size: 1.4rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+.an-v-sm {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.an-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+}
+.an-tone-success {
+  color: var(--success);
+}
+.an-tone-warning {
+  color: var(--warning);
+}
+.an-tone-error {
+  color: var(--error);
+}
+.an-tone-muted {
+  color: var(--text-muted);
+}
+.an-badge.an-tone-success {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+
+/* ── Distillation bar ───────────────────────────────────────────── */
+.an-distill {
+  margin-top: 14px;
+}
+.an-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  overflow: hidden;
+}
+.an-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.an-sub {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── QBER ───────────────────────────────────────────────────────── */
+.an-qber {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.an-qber-now {
+  font-size: 2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.an-qber-verdict {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.an-chart {
+  width: 100%;
+  height: 56px;
+  display: block;
+  margin: 10px 0 4px;
+}
+
+/* ── Security ───────────────────────────────────────────────────── */
+.an-sas {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0;
+  flex-wrap: wrap;
+}
+.an-sas-emoji {
+  font-size: 1.5rem;
+  letter-spacing: 4px;
+}
+.an-sas-digits {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.an-fp {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+}
+.an-fp code {
+  color: var(--text-primary);
+  font-size: 0.74rem;
+}
+
+/* ── Media sparklines ───────────────────────────────────────────── */
+.an-spark {
+  margin-top: 12px;
+}
+.an-spark-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.an-sparkline {
+  width: 100%;
+  height: 34px;
+  display: block;
+  margin-top: 2px;
+}
+
+/* ── Timeline ───────────────────────────────────────────────────── */
+.an-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.an-timeline li {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 0.82rem;
+  padding: 4px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 60%, transparent);
+}
+.an-ev-t {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 64px;
+  font-size: 0.74rem;
+}
+.an-ev-empty {
+  color: var(--text-muted);
+  border: none !important;
+}
+
+/* ── Summary ────────────────────────────────────────────────────── */
+.an-summary {
+  max-width: 640px;
+  margin: 0 auto 16px;
+}
+
+/* ── Presentation density (projector-grade) ─────────────────────── */
+#analytics-root[data-density='presentation'] {
+  padding: 32px 44px 48px;
+}
+[data-density='presentation'] .an-header h1 {
+  font-size: 1.9rem;
+}
+[data-density='presentation'] .an-status {
+  font-size: 1.15rem;
+}
+[data-density='presentation'] .an-grid {
+  gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+[data-density='presentation'] .an-panel,
+[data-density='presentation'] .an-summary {
+  padding: 22px 26px;
+}
+[data-density='presentation'] .an-v {
+  font-size: 1.9rem;
+}
+[data-density='presentation'] .an-qber-now {
+  font-size: 2.8rem;
+}
+[data-density='presentation'] .an-chart {
+  height: 76px;
+}
+[data-density='presentation'] .an-sparkline {
+  height: 46px;
+}
+[data-density='presentation'] .an-timeline li {
+  font-size: 0.95rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .an-bar span {
+    transition: none;
+  }
+}
