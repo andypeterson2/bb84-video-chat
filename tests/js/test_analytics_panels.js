@@ -11,6 +11,7 @@ import {
   qberVerdict,
   shortFp,
   eventLabel,
+  eveCalloutMarkup,
 } from '../../website/client/static/js/analytics/analytics.js';
 
 // Canvas stub so the chart/sparkline draws run without a real 2D context.
@@ -191,5 +192,33 @@ describe('pure helpers', () => {
   test('eventLabel humanizes known kinds', () => {
     expect(eventLabel('minted')).toBe('Key minted');
     expect(eventLabel('qber-abort')).toBe('QBER abort');
+  });
+});
+
+describe('eveCalloutMarkup', () => {
+  test('is empty when no eavesdropper demo is running', () => {
+    expect(eveCalloutMarkup({ eavesdropping: false, peerEavesdropping: false })).toBe('');
+  });
+
+  test('narrates the demo before the QBER crosses the abort line', () => {
+    const html = eveCalloutMarkup({ eavesdropping: true, qber: 0.05, qberThreshold: 0.11 });
+    expect(html).toContain('Eavesdropper demo active');
+    expect(html).not.toContain('an-callout-alarm');
+    expect(html).toContain('You enabled');
+  });
+
+  test('escalates to an alarm once QBER is over the threshold — key aborted', () => {
+    const html = eveCalloutMarkup({ peerEavesdropping: true, qber: 0.24, qberThreshold: 0.11 });
+    expect(html).toContain('an-callout-alarm');
+    expect(html).toContain('key aborted');
+    expect(html).toContain('24.0%');
+    expect(html).toContain('Your partner enabled');
+  });
+
+  test('renders in the live panel view when an eavesdropper is active', () => {
+    renderPanels(root(), { ...liveSnap, eavesdropping: true, qber: 0.3 }, new SeriesBuffers());
+    expect(root().querySelector('.an-callout')).not.toBeNull();
+    // The hero pipeline canvas is present in the live view too.
+    expect(root().querySelector('#an-pipeline')).not.toBeNull();
   });
 });

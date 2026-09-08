@@ -12,6 +12,7 @@
  */
 
 import { TELEMETRY_CHANNEL, EVENT_KINDS } from './telemetry.js';
+import { pipelineModel, createPipeline } from './pipeline.js';
 
 /* ── Formatters ──────────────────────────────────────────────────── */
 
@@ -299,6 +300,35 @@ function summaryCard(s) {
 }
 
 /**
+ * The guided eavesdropper callout — narrates the tamper-detection for the
+ * audience. Shown only while an eavesdropper demo is active (either side); it
+ * escalates to an alarm once QBER crosses the abort line, the moment the QBER
+ * gate closes and no compromised key is minted. Empty when no demo is running.
+ */
+export function eveCalloutMarkup(s) {
+  if (!s.eavesdropping && !s.peerEavesdropping) return '';
+  const over = typeof s.qber === 'number' && s.qberThreshold != null && s.qber > s.qberThreshold;
+  const who = s.peerEavesdropping && !s.eavesdropping ? 'Your partner enabled' : 'You enabled';
+  const tail = over
+    ? ` — QBER is ${(s.qber * 100).toFixed(1)}%, past the ${((s.qberThreshold ?? 0.11) * 100).toFixed(0)}% abort line, so the QBER gate closed and no compromised key was minted.`
+    : '. Watch the QBER climb toward the abort line.';
+  return `
+    <div class="an-callout ${over ? 'an-callout-alarm' : ''}" role="status">
+      <div class="an-callout-title">${over ? '⚠ Eavesdropper detected — key aborted' : 'Eavesdropper demo active'}</div>
+      <div class="an-callout-body">${who} the intercept-resend demo. In BB84, measuring a qubit in the wrong basis disturbs it, so an eavesdropper drives the error rate up${tail}</div>
+    </div>`;
+}
+
+/** The animated key-pipeline hero (the canvas the pipeline animation draws to). */
+function heroMarkup() {
+  return `
+    <section class="an-hero">
+      <h2>End-to-end key pipeline</h2>
+      <canvas id="an-pipeline" class="an-pipeline"></canvas>
+    </section>`;
+}
+
+/**
  * Render the whole page into `root` from a snapshot + accumulated series, then
  * draw the canvases. Idempotent: safe to call on every snapshot.
  */
@@ -334,6 +364,8 @@ export function renderPanels(root, snap, buffers, nowT = Date.now()) {
 
   root.innerHTML = `
     ${header}
+    ${eveCalloutMarkup(s)}
+    ${heroMarkup()}
     <div class="an-grid">
       ${reservoirPanel(s)}
       ${qberPanel(s)}
@@ -409,6 +441,8 @@ export function createAnalytics({ root, channel, storage }) {
 
   draw(); // initial empty state
   return {
+    /** Latest pipeline model — the persistent animation reads this each frame. */
+    getModel: () => pipelineModel(last),
     destroy() {
       root.removeEventListener('click', onClick);
       channel.onmessage = null;
@@ -427,10 +461,14 @@ if (typeof document !== 'undefined') {
     } catch {
       document.documentElement.dataset.theme = 'light';
     }
-    createAnalytics({
+    const api = createAnalytics({
       root,
       channel: new BroadcastChannel(TELEMETRY_CHANNEL),
       storage: window.localStorage,
     });
+    // One persistent animation loop; it grabs whichever #an-pipeline canvas is
+    // currently mounted (renderPanels rebuilds it each snapshot) and reads the
+    // latest model, so particle state survives the re-renders.
+    createPipeline(() => document.getElementById('an-pipeline'), api.getModel);
   }
 }
