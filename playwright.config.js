@@ -1,7 +1,5 @@
-// Playwright config for the two-context e2e suite (optical + simulated).
-// A single chromium instance runs two browser contexts through a real call
-// over the local signaling server; the optical spec also uses two bench
-// daemons wired by an emulated fiber (see tests/e2e/launch.mjs).
+// One chromium runs two browser contexts through a real call over the local
+// signaling server; the optical spec adds two bench daemons on an emulated fiber.
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({

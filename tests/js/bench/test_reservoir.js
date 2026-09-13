@@ -138,9 +138,8 @@ describe('reservoir streaming', () => {
   });
 
   test('a full reservoir bounds the pending pool and pauses production', async () => {
-    // No installs fire (huge floor), so the pool only drains by the cap. The
-    // invariant: pending keys never exceed the cap, and once full, minting
-    // stops (flow control) instead of growing unbounded.
+    // Huge floor so no installs fire: pending keys must never exceed the cap,
+    // and a full pool pauses minting instead of growing.
     globalThis.QVC_ROTATION_FLOOR_MS = 60_000;
     const p = enginePair();
     try {
@@ -187,9 +186,8 @@ describe('reservoir failure semantics', () => {
         for (const f of failed) expect(f.reason).toBe('qber-exceeded');
         expect(failed.at(-1).qber ?? failed[0].qber).toBeGreaterThan(0.11);
 
-        // Toggle off: latch clears, streaming resumes, keys mint. (The UI
-        // routes the toggle to the source side; the detector recovers by
-        // following the announced session restart.)
+        // Toggle off at the source; the detector follows the announced session
+        // restart, the latch clears and keys mint again.
         p.engines.source.setEavesdropper(false);
         await p.untilInstalled(1);
         expect(Array.from(p.installed.source[0].key)).toEqual(

@@ -57,16 +57,14 @@ def _version() -> str:
 
 # CORS: any localhost port + the production domain. The localhost entry is a
 # FULLY ANCHORED regex on purpose — flask-cors matches regex entries with
-# re.match (start-anchored only), so the old wildcard "http://localhost:*"
-# also admitted origins like http://localhostevil.com.
+# re.match (start-anchored only), so a wildcard like "http://localhost:*"
+# would also admit origins like http://localhostevil.com.
 _CORS_RAW = os.environ.get(
     "QVC_CORS_ORIGINS",
     r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$,https://andypeterson.dev",
 )
-# Deployments configured before the anchoring fix may still carry the legacy
-# port-wildcard form ("http://<host>:*"). Left as-is it would be matched
-# EXACTLY (never true for a real Origin header), silently locking those
-# deployments out — so translate it to the anchored any-port regex instead.
+# Port-wildcard entries ("http://<host>:*") would match only literally and lock
+# every real Origin out, so they're translated to the anchored any-port regex.
 _LEGACY_WILDCARD = re.compile(r"(https?)://([A-Za-z0-9.\-]+):\*")
 
 
@@ -151,13 +149,11 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     flask_app = Flask(__name__)
     CORS(flask_app, origins=_CORS_LIST)
 
-    # Use eventlet in production (Docker), threading for tests/local dev.
-    # main.py forces eventlet for the real server (and monkey-patches the
-    # stdlib) so the async model matches the WSGI server it runs under.
+    # Threading for tests/local dev; the production entry point sets eventlet
+    # to match its WSGI server.
     _async_mode = os.environ.get("SIO_ASYNC_MODE", "threading")
-    # Cap inbound frames so an oversize payload can't exhaust memory. Signaling
-    # messages are small (an SDP offer is the largest, a few KB); 64 KiB is
-    # generous headroom. Overridable for unusual SDP.
+    # Cap inbound frames so an oversize payload can't exhaust memory. The largest
+    # message, an SDP offer, is a few KB; overridable for unusual SDP.
     _max_buffer = int(os.environ.get("QVC_MAX_HTTP_BUFFER", str(64 * 1024)))
     sio = socketio.Server(
         cors_allowed_origins=_check_origin,
@@ -182,9 +178,8 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
 
     # ── REST endpoints ──────────────────────────────────────────────
 
-    # Admin surface is fail-closed: without QVC_ADMIN_SECRET in the environment
-    # it does not exist (404, indistinguishable from no such route), and with it
-    # every /admin request must present the secret in X-Admin-Secret.
+    # Fail-closed: without QVC_ADMIN_SECRET the admin surface 404s like a missing
+    # route; with it, every /admin request must send the secret in X-Admin-Secret.
     admin_secret = os.environ.get("QVC_ADMIN_SECRET", "")
 
     @flask_app.before_request

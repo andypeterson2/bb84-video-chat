@@ -1,8 +1,8 @@
 /**
  * Frame-level media encryption — SFrame-aligned (RFC 9605).
  *
- * Shared by the Insertable-Streams worker (crypto-worker.js) and the tests, via
- * an injectable SubtleCrypto so it runs under Node too.
+ * Shared by the Insertable-Streams worker and the tests, via an injectable
+ * SubtleCrypto so it runs under Node too.
  *
  * Each key epoch (KID) derives an AES-GCM key and a 12-byte salt from the
  * BB84-minted secret (HKDF-SHA-256, a one-step ratchet). The per-frame nonce is

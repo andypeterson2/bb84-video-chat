@@ -263,13 +263,10 @@ export class WebRTCManager {
     });
 
     this._socket.on('offer', async (data) => {
-      // Mid-call offer handling. The ONLY legitimate mid-call offer is an ICE
-      // restart, and it is applied to the EXISTING peer connection — reusing its
-      // senders, encoded-transform, and keyed crypto worker — so the fail-closed
-      // key is preserved and the worker is never rebuilt keyless. Any other
-      // mid-call offer is the downgrade the guard exists to reject: an
-      // unflagged offer would silently rebuild the connection with a fresh
-      // keyless worker, flowing plaintext while the UI still said encrypted.
+      // The ONLY legitimate mid-call offer is an ICE restart, applied to the
+      // EXISTING connection so its senders, transform and keyed crypto worker
+      // survive. Any other is a downgrade to reject: it would silently rebuild
+      // the connection with a fresh keyless worker while the UI said encrypted.
       if (this._pc) {
         if (data.iceRestart && data.sdp) {
           try {

@@ -21,8 +21,8 @@
  *    media path even if the invite link leaked: a MITM terminating DTLS
  *    presents different fingerprints and the strings visibly differ.
  *
- * Trust tiers (stated in docs/THREAT_MODEL.md): authenticated if your link
- * channel was; verified if you compared the SAS.
+ * Trust tiers: authenticated if your link channel was; verified if you
+ * compared the SAS.
  */
 
 const CONTEXT_SALT = 'qvc-channel-auth-v1';
@@ -154,22 +154,22 @@ export class ChannelAuth {
 
   /**
    * Derive the SAS from the two DTLS fingerprints. Pure: no transcript, no
-   * freezing, no per-side state — the earlier transcript-based SAS diverged
-   * between the two sides the moment their processing histories differed
-   * (a failed round, a dropped message), turning an honest channel into a
-   * permanent "MITM" reading. Fingerprints alone are already what the SAS
-   * must bind: they identify the DTLS endpoints of the media path.
+   * freezing, no per-side state, so two honest sides agree whatever their
+   * processing histories (a failed round, a dropped message). Fingerprints
+   * alone are what the SAS must bind: they identify the DTLS endpoints of the
+   * media path.
+   *
+   * Strength is ~40 bits: 6 decimal digits from a 32-bit word (~20 bits) plus
+   * 4 emoji at 5 bits each (SAS_EMOJI has exactly 32 entries, so b % 32 is
+   * unbiased). That is adequate only because the orchestrator's
+   * commit-then-reveal fingerprint exchange reduces an active MITM to a single
+   * blind guess at the displayed SAS, the ZRTP property (RFC 6189). Without
+   * that commitment step, the SAS must be wider.
    * @param {string} fpInitiator - initiator's DTLS fingerprint
    * @param {string} fpJoiner - joiner's DTLS fingerprint
    * @returns {Promise<{digits: string, emoji: string[]}>}
    */
   async sas(fpInitiator, fpJoiner) {
-    // SAS strength is ~40 bits: 6 decimal digits from a 32-bit word (~20 bits)
-    // plus 4 emoji at 5 bits each (SAS_EMOJI has exactly 32 entries, so b % 32
-    // is unbiased). This is adequate only because the orchestrator's
-    // commit-then-reveal fingerprint exchange reduces an active MITM to a
-    // single blind guess at the displayed SAS — the ZRTP property (RFC 6189).
-    // If that commitment step is ever removed, widen the SAS before shipping.
     const material = [`${CONTEXT_SALT}-sas`, fpInitiator, fpJoiner].join('\n');
     const d = new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode(material)));
     const digits = String(((d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3]) >>> 0)

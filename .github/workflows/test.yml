@@ -29,8 +29,7 @@ jobs:
         run: pip install "ruff~=0.15.16"
 
       - name: Run ruff check
-        # Whole repo — the old signaling/-scoped invocation silently skipped
-        # tests/conftest.py and tests/__init__.py.
+        # Whole repo, so the test tree is linted along with the server.
         run: ruff check .
 
   python-tests:

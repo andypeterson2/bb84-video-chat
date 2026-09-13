@@ -37,10 +37,8 @@ export class QualityController {
     this._intervalId = null;
     this._prevBytesSent = null;
     this._prevTimestamp = null;
-    // Start at the top tier and DOWNSHIFT on evidence, rather than climbing up
-    // from SD (which left a fat link at SD for the ~6s the up-shift hysteresis
-    // takes). The high encoder ceiling is GCC-throttled, so an over-optimistic
-    // start self-corrects within the first few polls on a constrained link.
+    // Start at the top tier and DOWNSHIFT on evidence: the encoder ceiling is
+    // GCC-throttled, so an optimistic start self-corrects within a few polls.
     this._currentTier = TIERS[0];
     this._pendingTier = null;
     this._pendingCount = 0;

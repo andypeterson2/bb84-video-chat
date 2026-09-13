@@ -11,7 +11,7 @@ import pytest
 
 from signaling.server import create_app
 
-# Matches the secret conftest.py sets in the environment.
+# Matches the admin secret the test session sets in the environment.
 ADMIN_HEADERS = {"X-Admin-Secret": "test-admin-secret"}
 
 
@@ -86,9 +86,8 @@ class TestServerConfig:
     bounded inbound buffer."""
 
     def test_async_mode_honors_env(self, monkeypatch):
-        # main.py sets this to "eventlet" so the Socket.IO async model matches
-        # the eventlet WSGI server; a "threading" Socket.IO under eventlet
-        # spawns OS threads that race the greenlets over shared room state.
+        # Production runs eventlet; a "threading" Socket.IO under the eventlet
+        # WSGI server races OS threads against greenlets over room state.
         monkeypatch.setenv("SIO_ASYNC_MODE", "eventlet")
         _, sio, _ = create_app()
         assert sio.async_mode == "eventlet"
@@ -309,7 +308,6 @@ class TestSignalingFlow:
         p1 = env["make_peer"]("sid1")
         p2 = env["make_peer"]("sid2")
 
-        # Create room
         p1.emit_event("create_room")
         room_id = env["rooms"].get_peer("sid1").room_id
         assert room_id is not None
@@ -672,7 +670,6 @@ class TestDashboardEndpoints:
         assert status["peers"] == 2
         assert status["rooms"] == 0
 
-        # Create room
         p1.emit_event("create_room")
         status = client.get("/admin/status", headers=ADMIN_HEADERS).get_json()
         assert status["rooms"] == 1

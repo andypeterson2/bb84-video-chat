@@ -21,12 +21,13 @@ const rawKey = new Uint8Array(16).fill(7);
 
 describe('SFrame header codec', () => {
   test('round-trips KID and CTR across sizes, plus the keyframe bit', () => {
+    // KIDs either side of the inline limit (7), CTRs of 1, 2 and 4 bytes.
     for (const [kid, ctr, isKey] of [
       [0, 0, false],
-      [7, 1, true], // small KID inline, keyframe
-      [8, 255, false], // extended KID, 1-byte CTR max
-      [1000, 300, true], // multi-byte KID and CTR
-      [3, 16_777_216, false], // 4-byte CTR
+      [7, 1, true],
+      [8, 255, false],
+      [1000, 300, true],
+      [3, 16_777_216, false],
     ]) {
       const h = encodeHeader(kid, ctr, isKey);
       const d = decodeHeader(h);

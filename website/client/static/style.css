@@ -801,7 +801,7 @@ input {
   display: block;
   transform: scaleX(-1); /* mirror the self-view */
 }
-/* Corner label on the self-preview and the remote video (M1). */
+/* Corner label on the self-preview and the remote video. */
 .video-label {
   position: absolute;
   left: 10px;
@@ -1095,7 +1095,7 @@ input {
   animation: spin 0.8s linear infinite;
 }
 
-/* Distillation stalled by a noisy channel (M3) */
+/* Distillation stalled by a noisy channel */
 .qd-distill-fill--stalled {
   background: var(--text-muted);
   opacity: 0.6;

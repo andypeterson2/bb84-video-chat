@@ -1,13 +1,8 @@
 /**
- * Render tests for the CURRENT app.js UI.
- *
- * The predecessor suite (test_app_dom.js) targeted a copy of app.js in the
- * parent website repo that no longer exists, so every test silently skipped —
- * 41 tests of dead weight advertised as coverage. This suite loads the real
- * website/client/static/app.js with the same Function-constructor technique
- * and pins the states that matter: the lobby (invite link, join-input
- * preservation), the cipher pill for every worker state, and the room-token
- * parser both entry points share.
+ * Render tests for the page bootstrap script, loaded via the Function
+ * constructor. Pins the lobby (invite link, join-input preservation), the
+ * cipher pill for every worker state, and the room-token parser both entry
+ * points share.
  */
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -17,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_JS_PATH = resolve(__dirname, '../../website/client/static/app.js');
 
 function setupGlobals() {
-  // app.js only touches these at connect/call time, but they must exist.
+  // Only touched at connect/call time, but they must exist at load.
   globalThis.io = () => ({ on: () => {}, emit: () => {}, disconnect: () => {} });
   const ctxStub = new Proxy({}, { get: (t, prop) => (prop === 'canvas' ? {} : () => ctxStub) });
   HTMLCanvasElement.prototype.getContext = function () {
@@ -26,8 +21,8 @@ function setupGlobals() {
 }
 
 /**
- * Load app.js into the jsdom context. Top-level const/let become var so the
- * trailing return can hand the internals back to the tests.
+ * Load the bootstrap into the jsdom context. Top-level const/let become var so
+ * the trailing return can hand the internals back to the tests.
  */
 function loadApp() {
   let code = readFileSync(APP_JS_PATH, 'utf-8');

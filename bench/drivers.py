@@ -20,9 +20,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-# Detector identity encodes the measured basis and bit over four SPADs:
-#   0 = Z/H (basis 0, bit 0)   1 = Z/V (basis 0, bit 1)
-#   2 = X/D (basis 1, bit 0)   3 = X/A (basis 1, bit 1)
+# Four SPADs indexed by basis*2 + bit: 0 = Z/H, 1 = Z/V, 2 = X/D, 3 = X/A
+# (Z is basis 0, X is basis 1).
 DETECTOR_BASIS = (0, 0, 1, 1)
 DETECTOR_BIT = (0, 1, 0, 1)
 
@@ -99,9 +98,8 @@ class TimeTaggerDriver(abc.ABC):
     and the clock transform, yield the resulting clicks.
     """
 
-    #: Whether this bench has a hardware sync input (shared clock from the
-    #: source laser). False ⇒ synchronization must be recovered from the
-    #: qubit stream itself (Qubit4Sync).
+    #: Whether the source laser's clock arrives on a hardware sync input. If
+    #: False, sync is recovered from the qubit stream itself (Qubit4Sync).
     has_sync_input: bool = False
 
     @abc.abstractmethod

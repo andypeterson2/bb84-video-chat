@@ -168,7 +168,7 @@ class MessageRouter {
 export class ReservoirEngine {
   /**
    * @param {object} options
-   * @param {import('../bb84/datachannel-adapter.js').DataChannelMux} options.mux
+   * @param {DataChannelMux} options.mux
    * @param {function(string, AbortSignal): {send: Function, receive: Function}} options.makeClassicalChannel -
    *   returns a (typically authenticated) channel bound to a MAC domain,
    *   whose receives abort on the given per-session signal
@@ -180,10 +180,8 @@ export class ReservoirEngine {
   constructor({ mux, makeClassicalChannel, frameSource, installKey, onState, slotsPerFrame }) {
     this._mux = mux;
     this._makeChannel = makeClassicalChannel;
-    // Built in start(), not here: the orchestrator finishes wiring the
-    // authenticated channel (ChannelAuth) between constructing the engine and
-    // calling start(), so building the control channel now would capture the
-    // unauthenticated fallback. See _ensureControl().
+    // Built in start(): channel auth is wired after construction, so building
+    // the control channel now would capture the unauthenticated fallback.
     this._control = null;
     this._source = frameSource;
     this._installKey = installKey;
@@ -319,10 +317,8 @@ export class ReservoirEngine {
     while (!this._destroyed) {
       let msg;
       try {
-        // Authenticated receive: a forged or out-of-sequence restart raises a
-        // ChannelAuthError and ends the loop (bounded DoS, only reachable
-        // behind a broken DTLS layer). In normal operation restarts are
-        // well-formed and in-sequence, so this only exits on teardown.
+        // A forged or out-of-sequence restart fails auth and ends the loop (a
+        // bounded DoS, only behind broken DTLS); normally only teardown ends it.
         msg = await this._control.receive();
       } catch {
         return;
@@ -341,9 +337,8 @@ export class ReservoirEngine {
     if (this._isSource && this._exhausted) return;
     this._sessionN = n;
     const abort = new AbortController();
-    // The channel receives the session's abort signal: on teardown its
-    // pending mux read rejects, so the router's pump exits instead of
-    // lingering as a second reader on the shared classical channel.
+    // On teardown the abort signal rejects the pending mux read, so the router's
+    // pump exits instead of lingering as a second reader on the classical channel.
     const channel = this._makeChannel(`frames-${n}`, abort.signal);
     const router = new MessageRouter(channel);
     this._session = { n, abort, router, channel };
@@ -595,9 +590,8 @@ export class ReservoirEngine {
       if (this._failures >= MAX_CONSECUTIVE_FAILURES) {
         this._latch();
         this._onState({ phase: 'exhausted', failures: this._failures });
-        // Both roles tear the session down: the source goes idle until the
-        // Eve toggle clears the latch; the detector frees `_session` so it
-        // can accept the source's eventual restart announcement.
+        // The source idles until the Eve toggle clears the latch; the detector
+        // frees `_session` so it can accept the source's restart announcement.
         this._teardownSession('exhausted');
         return;
       }

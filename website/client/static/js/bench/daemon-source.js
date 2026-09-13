@@ -174,11 +174,11 @@ export class DaemonConnection {
  * Decode a daemon `detections` message into the engine's detection shape;
  * null on malformed input.
  *
- * Mirrors reservoir.js `decodePeerDetections`' hardening. The daemon is a
- * local, token-paired component, but a buggy daemon (or a hostile configured
- * `ws://` endpoint) must not throw out of the ws.onmessage dispatch — the
- * caller only wraps JSON.parse. Count is derived from the index set: unlike
- * the peer message, a daemon `detections` carries no explicit count field.
+ * Hardened like the peer-detections decoder: the daemon is a local,
+ * token-paired component, but a buggy daemon (or a hostile configured `ws://`
+ * endpoint) must not throw out of the ws.onmessage dispatch, since the caller
+ * only wraps JSON.parse. Count is derived from the index set: unlike the peer
+ * message, a daemon `detections` carries no explicit count field.
  */
 export function decodeDaemonDetections(msg) {
   if (!msg || typeof msg !== 'object' || !Number.isInteger(msg.frame_id)) return null;
@@ -215,8 +215,7 @@ export class DaemonFrameSource {
   }
 
   async connect() {
-    // The connection was opened by app.js before negotiation (to learn the
-    // role); nothing to do here.
+    // Already opened before negotiation (to learn the role); nothing to do.
   }
 
   async start() {

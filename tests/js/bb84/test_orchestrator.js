@@ -167,9 +167,8 @@ describe('BB84Orchestrator liveness', () => {
   });
 
   test('junk on the classical wire costs a session; the restart recovers', async () => {
-    // Generous frame deadline so a spurious slow frame under parallel test
-    // load can't stack extra failures toward the latch (this exercises the
-    // restart path, not the exhausted path).
+    // Generous deadline: slow frames under test load mustn't stack failures
+    // toward the exhausted latch; this test exercises the restart path.
     globalThis.QVC_FRAME_DEADLINE_MS = 3000;
     const p = await pair();
     try {
