@@ -11,9 +11,8 @@ from __future__ import annotations
 import threading
 import time
 
-# Hard ceiling on tracked buckets. A client that can vary its key (e.g. XFF
-# spoofing when a deployment mistakenly trusts it) must not grow memory without
-# bound; beyond the cap the oldest buckets are evicted outright.
+# Hard ceiling on tracked buckets, so a client that can vary its key (e.g. a
+# spoofed XFF) can't grow memory without bound; the oldest are evicted past it.
 _MAX_BUCKETS = 10_000
 
 

@@ -466,9 +466,8 @@ if (typeof document !== 'undefined') {
       channel: new BroadcastChannel(TELEMETRY_CHANNEL),
       storage: window.localStorage,
     });
-    // One persistent animation loop; it grabs whichever #an-pipeline canvas is
-    // currently mounted (renderPanels rebuilds it each snapshot) and reads the
-    // latest model, so particle state survives the re-renders.
+    // One persistent loop draws on whichever #an-pipeline canvas is mounted (each
+    // snapshot rebuilds it), so particle state survives the re-renders.
     createPipeline(() => document.getElementById('an-pipeline'), api.getModel);
   }
 }

@@ -21,7 +21,7 @@ const LIVE_SLOTS_PER_FRAME = 8192;
 export class BB84Orchestrator {
   /**
    * @param {object} options
-   * @param {import('../webrtc.js').WebRTCManager} options.webrtcManager
+   * @param {WebRTCManager} options.webrtcManager
    * @param {function(object): void} options.onStateChange - phase events:
    *   'sas' { sas }, 'mode' { mode }, 'reservoir' { qber, accepted, pooledBits,
    *   mintBudget, detections, slots }, 'minted' { keyIndex, poolDepth },
@@ -66,8 +66,8 @@ export class BB84Orchestrator {
   }
 
   /**
-   * Declare a hardware bench backend for this call. Wired by app.js from the
-   * optical-mode settings; absent ⇒ the simulated (loopback) backend.
+   * Declare a hardware bench backend for this call, from the user's optical-mode
+   * settings; absent ⇒ the simulated (loopback) backend.
    * @param {{backend: 'bench', role: 'source'|'detector', connect: Function}} bench
    */
   configureBench(bench) {

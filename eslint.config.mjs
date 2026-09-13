@@ -1,6 +1,5 @@
-// Flat config (fleet lint baseline): @eslint/js recommended + complexity
-// budgets over the browser client and its vitest suites. Python is ruff's job
-// (ruff.toml); this file owns the JS half of the repo.
+// Flat config: @eslint/js recommended + complexity budgets over the browser
+// client and its vitest suites. Python is linted by ruff.
 import js from '@eslint/js';
 import globals from 'globals';
 import sonarjs from 'eslint-plugin-sonarjs';
@@ -42,15 +41,15 @@ export default [
       sourceType: 'script',
       globals: {
         ...globals.browser,
-        io: 'readonly', // socket.io client from the CDN <script> tag
+        io: 'readonly', // socket.io client from its own <script> tag
       },
     },
     plugins: { sonarjs },
     rules: sharedRules,
   },
   {
-    // The Insertable-Streams crypto worker — an ES-module Web Worker (it imports
-    // the shared crypto.js), loaded with `type: 'module'`.
+    // The Insertable-Streams crypto worker: an ES-module Web Worker that imports
+    // the shared crypto module, loaded with `type: 'module'`.
     files: ['website/client/static/js/crypto-worker.js'],
     languageOptions: {
       ecmaVersion: 'latest',
@@ -61,14 +60,13 @@ export default [
     rules: sharedRules,
   },
   {
-    // The bootstrap's main call-flow function sits at cognitive complexity 80 —
-    // grandfathered at the config level (the file is mid-refactor on the
-    // api-contract branch); the budget stays on for everything else.
+    // The bootstrap's main call-flow function is over budget (cognitive
+    // complexity 80), so only this file is exempt.
     files: ['website/client/static/app.js'],
     rules: { 'sonarjs/cognitive-complexity': 'off' },
   },
   {
-    // Vitest suites (jsdom; vitest.config.js sets globals: true).
+    // Vitest suites (jsdom, with vitest globals enabled).
     files: ['tests/js/**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',

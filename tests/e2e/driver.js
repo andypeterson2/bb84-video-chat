@@ -11,7 +11,7 @@ export function readToken(which) {
   return readFileSync(join(here, '.artifacts', `${which}.token`), 'utf-8').trim();
 }
 
-/** Inject the fast-timing globals every page needs before app.js loads. */
+/** Inject the fast-timing globals every page needs before the app script loads. */
 export async function fastTimers(page) {
   await page.addInitScript(() => {
     globalThis.QVC_FRAME_PERIOD_MS = 8;

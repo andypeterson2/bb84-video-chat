@@ -150,11 +150,8 @@ describe('SAS derivation (fingerprint-bound)', () => {
   });
 
   test('the SAS is a pure function of the fingerprints — same everywhere, always', async () => {
-    // The earlier transcript-bound SAS diverged between two honest sides the
-    // moment their processing histories differed (a failed round, a dropped
-    // message) — an honest channel then read as a permanent MITM. Purity is
-    // the property that kills that class: role, instance, round count and
-    // history must all be irrelevant.
+    // Role, instance, round count and history must not matter, or two honest
+    // sides whose histories differ would read as a MITM.
     const one = await ChannelAuth.create(TOKEN, 'initiator');
     const two = await ChannelAuth.create(TOKEN, 'joiner');
     const first = await one.sas('F1', 'F2');
@@ -204,7 +201,7 @@ describe('Orchestrator auth integration', () => {
 
   test('the SAS fingerprint exchange uses commit-then-reveal', async () => {
     // A MITM commitment mismatch must be caught. Corrupt bob's revealed
-    // nonce in flight so his reveal no longer matches his commitment.
+    // nonce in flight so his reveal doesn't match his commitment.
     const tamper = (self, data) => {
       if (self !== 'bob') return data;
       try {
@@ -308,16 +305,14 @@ describe('Orchestrator auth integration', () => {
       const sessionBefore = p.bob._engine._sessionN;
       // A raw (unauthenticated) session-restart to a bogus far-future session:
       // over the MAC'd control channel it fails verification and is dropped, so
-      // bob stays on its real session. Were it followed (as it was when the
-      // control channel was unauthenticated), bob would jump to session 999,
-      // desync from alice, and stop minting. Assert the session directly — no
-      // waiting on a fresh mint, which is timing-fragile under load.
+      // bob stays on its real session instead of jumping to 999, desyncing from
+      // alice, and ceasing to mint. Assert the session directly, not a fresh
+      // mint, which is timing-fragile under load.
       p.bob.handleMessage(
         JSON.stringify({ ch: 'control', payload: { type: 'session-restart', session: 999 } }),
       );
       await new Promise((r) => setTimeout(r, 30)); // let the (rejected) message be processed
-      // Not hijacked to the forged session; still a small real session number
-      // (a legitimate frame-deadline restart under load may bump it slightly).
+      // Not the forged session (a real deadline restart may bump it slightly).
       expect(p.bob._engine._sessionN).not.toBe(999);
       expect(p.bob._engine._sessionN).toBeLessThan(sessionBefore + 100);
       keysAgree(p); // existing keys still agree — no desync
@@ -355,9 +350,8 @@ describe('Orchestrator auth integration', () => {
       p.destroy();
       await p.init();
 
-      // A fresh fingerprint exchange + a stable SAS is the test's whole claim,
-      // and both are reliable without minting — the SAS is emitted right after
-      // the exchange, so no timing-fragile wait on a second-call mint.
+      // The SAS is emitted right after the exchange, so neither claim needs a
+      // timing-fragile wait on a second-call mint.
       await p.waitFor(() => expect(p.fpCalls).toEqual({ alice: 2, bob: 2 }));
       const secondSas = phase(p, 'alice', 'sas').at(-1).sas;
       expect(secondSas).toEqual(firstSas); // same fingerprints ⇒ same (pure) SAS

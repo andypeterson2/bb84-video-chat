@@ -182,9 +182,8 @@ async def serve(cfg: BenchConfig, *, pairing: Pairing | None = None) -> None:  #
         if not origin_allowed(origin, cfg.net.ws_allowed_origins):
             await ws.close(code=1008, reason="origin not allowed")
             return
-        # A fresh per-connection BenchConnection carries its own paired flag;
-        # the shared Pairing only holds the token, so nothing here can leak one
-        # connection's paired state to another or reset another's pairing.
+        # Paired state lives on this per-connection object, never on the shared
+        # Pairing (token only), so connections can't leak or reset each other's.
         conn = BenchConnection(cfg, pairing, lambda m: ws.send(json.dumps(m)), source=source, detector=detector)
         current["conn"] = conn
         try:

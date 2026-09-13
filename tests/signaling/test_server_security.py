@@ -178,21 +178,20 @@ class TestCORSAnchoring:
         assert resp.headers.get("Access-Control-Allow-Origin") == "http://localhost:3000"
 
     def test_check_origin_tolerates_the_engineio_call_shapes(self):
-        # engineio may invoke the callback as (origin, environ) or (origin),
-        # and passes origin=None when the request carries no Origin header —
-        # matching a regex against None would raise, so it must be handled.
-        assert _check_origin("http://localhost:3000", {"HTTP_ORIGIN": "x"})  # 2-arg
-        assert _check_origin("http://localhost:3000")  # 1-arg
-        assert not _check_origin(None)  # no Origin header
+        # engineio calls this as (origin, environ) or (origin), and passes None
+        # when there's no Origin header; a regex match on None would raise.
+        assert _check_origin("http://localhost:3000", {"HTTP_ORIGIN": "x"})
+        assert _check_origin("http://localhost:3000")
+        assert not _check_origin(None)
         assert not _check_origin("")
         assert not _check_origin("http://evil.com")
 
     @pytest.mark.parametrize(
         "headers",
         [
-            {},  # no Origin header — the case that actually 500'd
-            {"Origin": "http://localhost:3000"},  # allowed cross-origin
-            {"Origin": "http://evil.com"},  # rejected cross-origin
+            {},  # no Origin header
+            {"Origin": "http://localhost:3000"},
+            {"Origin": "http://evil.com"},
         ],
     )
     def test_socketio_handshake_never_500s_on_the_origin_check(self, headers):

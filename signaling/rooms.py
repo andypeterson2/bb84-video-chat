@@ -11,8 +11,7 @@ import time
 from dataclasses import dataclass, field
 
 # Room ids are unguessable capability tokens: knowing the id IS the invitation.
-# 16 bytes -> ~128 bits of entropy in a 22-char URL-safe string; the old 5-digit
-# codes (~16.6 bits) were enumerable in seconds.
+# 16 bytes -> ~128 bits of entropy in a 22-char URL-safe string.
 _ROOM_TOKEN_BYTES = 16
 _MAX_ID_ATTEMPTS = 8
 _MAX_PEERS_PER_ROOM = 2

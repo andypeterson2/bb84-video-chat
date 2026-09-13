@@ -29,9 +29,8 @@ from signaling.server import create_app  # noqa: E402
 flask_app, sio, rooms = create_app()
 CLIENT = ROOT / "website" / "client"
 
-# create_app() builds Flask(__name__), whose built-in /static/<file> route
-# points at the (nonexistent) signaling/static dir and would shadow any
-# catch-all. Repoint it at the client's static dir so /static/... resolves.
+# Flask's built-in /static route points at a nonexistent server-side dir and
+# shadows any catch-all, so repoint it at the client's static assets.
 flask_app.static_folder = str(CLIENT / "static")
 
 

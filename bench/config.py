@@ -50,9 +50,8 @@ class DetectorConfig:
     dark_rate_cps: float = 25_000.0
     jitter_sigma_ps: float = 350.0
     dead_time_ns: float = 50.0
-    #: Detection gate half-width as a fraction of the slot period. A click
-    #: outside the recovered slot's gate is dropped (this is where jitter and
-    #: mis-tracked drift genuinely cost detections).
+    #: Detection gate half-width as a fraction of the slot period. Clicks outside
+    #: the recovered slot's gate are dropped; that is how jitter and drift cost detections.
     gate_fraction: float = 0.4
 
 

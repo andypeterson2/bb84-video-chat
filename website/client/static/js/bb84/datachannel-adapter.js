@@ -16,22 +16,19 @@ export class MuxAbortError extends Error {
 
 // Only these logical channels exist; anything else in a message is discarded.
 const CHANNEL_NAMES = new Set(['quantum', 'classical', 'control']);
-// A peer can flood messages faster than the protocol consumes them; cap the
-// backlog so a hostile peer can't grow memory without bound. BB84 rounds
-// exchange ~10 classical messages and 1 quantum payload, so 64 is generous.
+// Cap the backlog so a flooding peer can't grow memory without bound; a BB84
+// round exchanges ~10 classical messages and 1 quantum payload.
 const MAX_BUFFERED_MESSAGES = 64;
-// Wire chunking: an SCTP DataChannel closes outright on messages over the
-// negotiated maximum (~256 KB in practice), and one round's simulated-qubit
-// payload is bigger than that. Split anything large into ordered chunks well
-// under the limit and reassemble on the far side.
+// SCTP closes the DataChannel on messages over the negotiated max (~256 KB) and a
+// round's simulated-qubit payload is bigger, so large sends go in ordered chunks.
 const MAX_WIRE_CHARS = 60 * 1024;
 // Reassembly caps (per hostile peer): bounded chunk count and one partial at
 // a time — the channel is ordered and reliable, so interleaving means abuse.
 const MAX_CHUNKS = 32;
 
 /**
- * Multiplexes a single DataChannel into named logical channels.
- * Uses the same buffer + resolveWaiter pattern as channel.js.
+ * Multiplexes a single DataChannel into named logical channels, each buffering
+ * messages until a receive() consumes them.
  */
 export class DataChannelMux {
   /**

@@ -22,44 +22,57 @@ const state = {
   qber: null,
   qberHistory: [], // per-frame QBER, most recent last (capped for the strip chart)
   keyIndex: null,
-  // Reservoir telemetry — the key currently being distilled and the pool.
-  mode: null, // 'sim' | 'optical' (backend badge; never claim photons that weren't)
-  reservoirBits: 0, // accepted sifted bits pooled toward the next key
-  mintBudget: null, // bits needed before a mint can run
+  // Reservoir telemetry: the key currently being distilled and the pool.
+  /** 'sim' | 'optical' (backend badge; never claim photons that weren't) */
+  mode: null,
+  /** Accepted sifted bits pooled toward the next key. */
+  reservoirBits: 0,
+  /** Bits needed before a mint can run. */
+  mintBudget: null,
   keysMinted: 0,
   rotations: 0,
   poolDepth: 0, // keys waiting in the reservoir to rotate in
   lastDetections: null,
-  // Worker-reported cipher truth: 'establishing' | 'encrypted' | 'unencrypted'
-  // | 'compromised' (re-key exhausted; last good key still active). Driven only
-  // by cipher-state messages from the crypto worker (or BB84 giving up) —
-  // never assumed from the UI's own bookkeeping.
+  /**
+   * 'establishing' | 'encrypted' | 'unencrypted' | 'compromised' (re-key
+   * exhausted; last good key still active). Set only by the crypto worker's
+   * cipher-state messages (or BB84 giving up), never by UI bookkeeping.
+   */
   cipherState: 'establishing',
   joinLink: '',
   sas: null, // {digits, emoji[]} — the fingerprint-bound short authentication string
   eavesdropper: false,
-  // Optical bench (hardware daemon) settings, persisted per-origin. When
-  // enabled the browser pairs with a local daemon and offers the optical
-  // backend in negotiation; the peer must present a complementary bench for
-  // optical mode to engage, otherwise both fall back to the simulator.
+  /**
+   * Optical bench (hardware daemon) settings, persisted per-origin. Optical mode
+   * engages only if the peer presents a complementary bench; otherwise both
+   * sides fall back to the simulator.
+   */
   optical: { enabled: false, url: 'ws://127.0.0.1:8781', token: '' },
-  opticalStatus: '', // pairing feedback shown in the optical settings row
-  quality: null, // adaptive-quality telemetry {tier, bandwidthKbps, rttMs, limitedBy, ...}
-  cryptoMetrics: null, // per-frame encrypt/decrypt latency from the crypto worker (1/s)
-  mediaError: '', // camera/mic permission failure, shown inline in the lobby
-  sasVerified: false, // user compared the SAS on camera and confirmed it matches
-  joining: false, // Join clicked, waiting for the peer connection to establish
-  invited: false, // arrived via an invite link (a room token is in the URL)
-  reconnecting: false, // ICE dropped mid-call; the transport is being restored
-  peerEavesdropping: false, // the other peer is running the eavesdropper demo
-  dashboardExpanded: false, // the BB84 telemetry panel is expanded (video-first default)
+  /** Pairing feedback shown in the optical settings row. */
+  opticalStatus: '',
+  /** Adaptive-quality telemetry {tier, bandwidthKbps, rttMs, limitedBy, ...}. */
+  quality: null,
+  /** Per-frame encrypt/decrypt latency from the crypto worker (1/s). */
+  cryptoMetrics: null,
+  /** Camera/mic permission failure, shown inline in the lobby. */
+  mediaError: '',
+  /** User compared the SAS on camera and confirmed it matches. */
+  sasVerified: false,
+  /** Join clicked, waiting for the peer connection to establish. */
+  joining: false,
+  /** Arrived via an invite link (a room token is in the URL). */
+  invited: false,
+  /** ICE dropped mid-call; the transport is being restored. */
+  reconnecting: false,
+  /** The other peer is running the eavesdropper demo. */
+  peerEavesdropping: false,
+  /** The BB84 telemetry panel is expanded (video-first default). */
+  dashboardExpanded: false,
 };
 
 const OPTICAL_STORAGE_KEY = 'qvc.optical';
-// The daemon pairing token is a live credential: keep it in sessionStorage so
-// it dies with the tab, rather than persisting in localStorage where it would
-// sit at rest, readable by any script on the origin. Non-secret settings
-// (enabled, url) still persist across sessions in OPTICAL_STORAGE_KEY.
+// The pairing token is a live credential, so it lives in sessionStorage and dies
+// with the tab; only non-secret settings persist in localStorage.
 const OPTICAL_TOKEN_KEY = 'qvc.optical.token';
 
 /** Per-frame QBER points kept for the strip chart. */
@@ -83,13 +96,19 @@ let benchConnection = null; // live DaemonConnection while optical mode is armed
 let qualityController = null; // adaptive bitrate/resolution while a call is up
 let QualityControllerCls = null; // resolved from the dynamic import
 
-// Analytics telemetry bus (second-window demo screen). All resolved from the
-// dynamic import in init; null until then and on browsers without BroadcastChannel.
-let telemetryBus = null; // BroadcastChannel('qvc-analytics')
-let telemetryTimer = null; // 250ms coalesced publisher while a call is up
-let eventLog = null; // EventLog instance (timeline ring buffer)
-let buildSnapshot = null; // buildTelemetrySnapshot
-let EVENT = {}; // EVENT_KINDS (empty until telemetry.js loads)
+// Analytics telemetry bus for the second-window demo screen. Null until init's
+// dynamic import resolves, and on browsers without BroadcastChannel.
+
+/** BroadcastChannel('qvc-analytics') */
+let telemetryBus = null;
+/** 250ms coalesced publisher while a call is up. */
+let telemetryTimer = null;
+/** EventLog instance (timeline ring buffer). */
+let eventLog = null;
+/** buildTelemetrySnapshot */
+let buildSnapshot = null;
+/** EVENT_KINDS; empty until the telemetry module loads. */
+let EVENT = {};
 
 /* ── Icons ──────────────────────────────────────────────────────── */
 const ICONS = {
@@ -164,14 +183,11 @@ function connectToSignaling(url) {
       eventLog = new EventLog(100);
       EVENT = EVENT_KINDS;
       setupTelemetryBus(TELEMETRY_CHANNEL, isValidCommand);
-      // ICE servers (STUN + short-lived TURN) come from the signaling backend so
-      // relay credentials stay short-lived and no long-lived secret ships to the
-      // client. Fetched before the manager so the first PeerConnection has them.
+      // STUN + short-lived TURN from the signaling backend, so no long-lived relay
+      // secret ships to the client; the first PeerConnection needs them.
       const iceServers = await fetchIceServers(url);
-      // Attach the Insertable Streams transforms up front. The crypto worker is
-      // FAIL-CLOSED: it drops every frame until BB84 delivers a key, then encrypts
-      // with no renegotiation. (Constructing with `false` never created the worker
-      // at all, so a derived key had nowhere to go — encryption never engaged.)
+      // The crypto worker is FAIL-CLOSED: it drops every frame until BB84
+      // delivers a key, then encrypts with no renegotiation.
       webrtcManager = new WebRTCManager(socket, { enableEncryption: true, iceServers });
 
       bb84 = new BB84Orchestrator({
@@ -181,9 +197,8 @@ function connectToSignaling(url) {
 
       webrtcManager.on('room-created', (d) => {
         state.roomId = d.room_id;
-        // The room id is an unguessable capability token: the invite link IS
-        // the credential. It travels in the fragment so it never reaches
-        // server logs or Referer headers.
+        // The invite link IS the credential (an unguessable room token); the
+        // fragment keeps it out of server logs and Referer headers.
         state.joinLink = `${window.location.origin}${window.location.pathname}#room=${encodeURIComponent(d.room_id)}`;
         state.waitingForPeer = true;
         render();
@@ -211,13 +226,9 @@ function connectToSignaling(url) {
       webrtcManager.on('data-channel-open', () => {
         state.bb84Active = true;
         render();
-        // The optical bench (if any) was already paired at create/join time,
-        // OFF this handshake path — a variable-latency pairing here would let
-        // the peer's early fingerprint messages arrive before init() built the
-        // mux, and they would be dropped. init() must run promptly so both
-        // sides' muxes exist before either sends. init() starts continuous
-        // streaming itself; a rejection means the secure-channel bootstrap
-        // failed before any streaming, so surface it loudly.
+        // init() must run promptly so both sides' muxes exist before either
+        // sends (any optical bench was paired earlier, off this path). A
+        // rejection means the secure-channel bootstrap failed, so surface it.
         bb84.init({ roomToken: state.roomId, isInitiator: state.isInitiator }).catch(() => {
           state.cipherState = 'compromised';
           showToast('Secure-channel setup failed — no key will be established.', 'error');
@@ -232,9 +243,8 @@ function connectToSignaling(url) {
       });
       webrtcManager.on('error', (d) => showToast(d.message || 'Something went wrong.', 'error'));
       webrtcManager.on('state-change', (d) => {
-        // Keep the user in-call across a transient ICE blip — webrtc.js attempts
-        // an ICE restart — and show a reconnecting indicator rather than dumping
-        // back to the lobby. Only an explicit leave / peer-disconnect tears down.
+        // Stay in-call, showing a reconnecting indicator, across a transient ICE
+        // blip; only an explicit leave / peer-disconnect tears down.
         if (d.state === 'connected' || d.state === 'completed') {
           if (state.reconnecting) logEvent(EVENT.recovered);
           state.peerConnected = true;
@@ -260,15 +270,13 @@ function connectToSignaling(url) {
           state.cipherState = 'unencrypted';
           showToast('Encryption worker failed — media is blocked, not sent in the clear.');
         } else if (msg.state === 'unsupported') {
-          // This browser has no RTCRtpScriptTransform: frames CANNOT be
-          // encrypted, and pretending otherwise is exactly the lie the
-          // fail-closed design exists to prevent.
+          // No RTCRtpScriptTransform: frames CANNOT be encrypted, and the UI
+          // must never claim otherwise.
           state.cipherState = 'unsupported';
           showToast('This browser cannot encrypt media frames — no key will be used.');
         } else if (msg.state === 'keyless') {
-          // The worker is dropping frames. Before the first key that is the
-          // normal establishing window; after one it means the keyed worker
-          // was replaced — a downgrade, shown loudly.
+          // Dropping frames: normal before the first key; after one, the keyed
+          // worker was replaced, a downgrade shown loudly.
           state.cipherState = hasBeenEncrypted() ? 'unencrypted' : 'establishing';
         }
         render();
@@ -339,9 +347,8 @@ function handleBB84State(s) {
       handleReservoirFailure(s);
       break;
     case 'exhausted':
-      // Out of recovery attempts. Frames still ride the LAST good key (the
-      // worker never downgrades), but no fresh key is obtainable — show it
-      // red and leave the decision to the user.
+      // Frames still ride the LAST good key (the worker never downgrades), but no
+      // fresh key is obtainable: show red and leave the decision to the user.
       state.cipherState = 'compromised';
       logEvent(EVENT.compromised);
       showToast('Channel integrity lost — tampering or a persistent fault. Leave and retry.');
@@ -380,10 +387,8 @@ function handleReservoirFailure(s) {
 function loadOpticalSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(OPTICAL_STORAGE_KEY) || '{}');
-    // The token lives in sessionStorage (per-tab, non-persistent); everything
-    // else in localStorage. A migration path for tokens written by an older
-    // build: if none is in sessionStorage, fall back to (and then clear) the
-    // one that may still be in the localStorage blob.
+    // Token from sessionStorage, else any token left in the localStorage blob
+    // (which is then rewritten without it).
     let token = '';
     try {
       token = sessionStorage.getItem(OPTICAL_TOKEN_KEY) || '';
@@ -404,7 +409,7 @@ function loadOpticalSettings() {
 
 function saveOpticalSettings() {
   // Persist non-secret settings only; the token is never written to
-  // localStorage (see OPTICAL_TOKEN_KEY).
+  // localStorage.
   try {
     localStorage.setItem(
       OPTICAL_STORAGE_KEY,
@@ -609,10 +614,8 @@ function showLocalVideo(s) {
   }
 }
 function showRemoteVideo(s) {
-  // Keep the stream in module state: render() rebuilds the in-call DOM with
-  // innerHTML, so the <video> this attaches to is replaced on every state
-  // change — without the re-attachment in render(), the remote video went
-  // black on the first re-render after the stream arrived.
+  // render() replaces the <video> on every state change and re-attaches this
+  // stored stream, or the remote video would go black.
   remoteStream = s;
   const v = document.getElementById('remote-video');
   if (v) {
@@ -667,9 +670,7 @@ async function startLocalMedia() {
 async function handleCreateRoom() {
   if (!webrtcManager) return;
   state.isInitiator = true; // the creator runs BB84 as Alice
-  // Pair the optical bench now, BEFORE the peer connects — so the daemon's
-  // variable-latency handshake is nowhere near the DataChannel bootstrap,
-  // where a slow init would drop the peer's early fingerprint messages.
+  // Pair the bench BEFORE the peer connects, clear of the DataChannel bootstrap.
   await connectOpticalBenchIfEnabled();
   if (!(await startLocalMedia())) return;
   webrtcManager.createRoom();
@@ -716,7 +717,7 @@ async function handleJoinRoom(e) {
   }
   if (!webrtcManager) return;
   state.isInitiator = false; // the joiner runs BB84 as Bob
-  // Pair the optical bench before connecting (see handleCreateRoom).
+  // Pair the bench BEFORE connecting, clear of the DataChannel bootstrap.
   await connectOpticalBenchIfEnabled();
   if (!(await startLocalMedia())) return;
   state.joining = true; // show "Connecting…" until the peer stream arrives

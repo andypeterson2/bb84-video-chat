@@ -90,9 +90,8 @@ export class LoopbackFrameSource {
     await sim.sendQubits(qubits);
     const transmitted = await receiver.receiveQubits();
 
-    // Detector-bench measurement: random basis per detection; wrong basis
-    // yields simulated quantum randomness (physics, not a secret — plain
-    // Math.random is deliberate, matching the simulator's own RNG).
+    // Random basis per detection; a wrong basis yields a random bit. Plain
+    // Math.random is deliberate: simulated physics, not a secret.
     const indices = [];
     const detBits = [];
     const detBases = [];

@@ -17,14 +17,14 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https: wss: ws://localhost:* ws://127.0.0.1:*; base-uri 'self'; object-src 'none'">
     <title>QKD Video Chat</title>
     <!-- ?v= cache-busters roll the CSS/JS pair over together on deploy; a
-         stale cached app.js driving a fresh crypto worker (or vice versa) is
-         a silent mixed-version hazard. Bump on release. -->
+         stale cached bootstrap script driving a fresh crypto worker (or vice
+         versa) is a silent mixed-version hazard. Bump on release. -->
     <link rel="stylesheet" href="static/style.css?v=11">
   </head>
   <body>
     <div id="app" class="main-screen"></div>
-    <!-- Vendored socket.io-client 4.7.5 (was a CDN tag — a third party in the
-         E2E-crypto page's script chain). Provenance: cdn.socket.io + jsDelivr,
+    <!-- Vendored socket.io-client 4.7.5, so no CDN sits in the E2E-crypto
+         page's script chain. Provenance: cdn.socket.io + jsDelivr,
          both matching the sha384 below. The integrity attribute enforces that
          hash: a tampered vendor file is refused rather than executed. -->
     <script src="static/vendor/socket.io-4.7.5.min.js"

@@ -15,16 +15,12 @@
  *   - out: { type: 'decrypt-error', failures } (debounced, at most one per second)
  */
 
-// SFrame-aligned framing (RFC 9605): the shared crypto.js module derives a
-// per-epoch AES-GCM key + salt, seals each frame under a salt-XOR-counter nonce
-// with the header bound as AAD, and opens frames by the KID in that header. The
-// worker owns only the epoch ring, the send counter, and the fail-closed policy.
+// SFrame-aligned sealing (RFC 9605) is shared; the worker owns only the epoch
+// ring, the send counter, and the fail-closed policy.
 import { deriveEpoch, sealFrame, openFrame } from './crypto.js';
 
-// Key ring: the current epoch plus its predecessor, selected per-frame by the
-// KID the sender wrote into the header. During a re-key the two sides never
-// switch on the same frame; with a single slot every frame under the other
-// epoch failed auth and the video froze at each re-key.
+// Current epoch plus its predecessor, picked per frame by the header's KID: the
+// sides never re-key on the same frame, so one slot would fail auth mid-re-key.
 const KEY_RING_SIZE = 2;
 const keyRing = new Map(); // KID -> { key: CryptoKey, salt: Uint8Array(12) }
 let currentEpoch = null; // { key, salt } for currentKeyIndex
@@ -117,9 +113,8 @@ async function decryptFrame(frame, controller) {
 
   const t0 = performance.now();
 
-  // Open selects the epoch by the KID the SENDER wrote into the header (the two
-  // sides never re-key on the same frame boundary). null = malformed header,
-  // drop silently; a throw = unknown KID or GCM auth/AAD mismatch, count it.
+  // Epoch by the SENDER's header KID. null = malformed header, drop silently;
+  // a throw = unknown KID or GCM auth/AAD mismatch, count it.
   let opened;
   try {
     opened = await openFrame(frame.data, (kid) => keyRing.get(kid));
