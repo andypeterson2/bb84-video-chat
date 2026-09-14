@@ -54,6 +54,47 @@ describe('mint budget accounting', () => {
   });
 });
 
+/** Deterministic PRNG so a failing error pattern can be replayed. */
+function seededRandom(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Flip exactly round(qber × n) distinct, uniformly placed bits. */
+function withErrors(pool, qber, seed) {
+  const rand = seededRandom(seed);
+  const noisy = [...pool];
+  const positions = new Set();
+  while (positions.size < Math.round(qber * pool.length)) {
+    positions.add(Math.floor(rand() * pool.length));
+  }
+  for (const i of positions) noisy[i] ^= 1;
+  return noisy;
+}
+
+describe('reconciliation at realistic QBER', () => {
+  test.each([
+    [0.01, 11],
+    [0.03, 12],
+    [0.05, 13],
+  ])('errors at random positions (QBER %f) are corrected and keys match', async (qber, seed) => {
+    const pool = Array.from(randomBits(2000));
+    const noisy = withErrors(pool, qber, seed);
+    const [a, b] = ioPair();
+    const [srcKey, detKey] = await Promise.all([
+      distillSource([...pool], a, { mintId: 10, qber }),
+      distillDetector(noisy, b, { mintId: 10 }),
+    ]);
+    expect(Array.from(detKey)).toEqual(Array.from(srcKey));
+  });
+});
+
 describe('distillation', () => {
   test('a clean pool mints identical keys on both ends', async () => {
     const pool = Array.from(randomBits(600));
