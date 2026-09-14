@@ -17,7 +17,7 @@ Browser A ◄══ WebRTC (P2P encrypted media) ══► Browser B
 - **WebRTC**: peer-to-peer video/audio via `RTCPeerConnection`
 - **Insertable Streams**: AES-128-GCM frame encryption in a Web Worker (`RTCRtpScriptTransform`)
 - **DataChannel**: BB84 key exchange messages flow peer-to-peer
-- **BB84 Protocol** (JavaScript): sifting, QBER estimation, block-parity error correction (simplified; full Cascade is future work), seeded Toeplitz privacy amplification
+- **BB84 Protocol** (JavaScript): sifting, QBER estimation, Cascade error correction (Brassard & Salvail, six passes), a key-verification hash, seeded Toeplitz privacy amplification
 
 ## Quick Start
 
@@ -86,7 +86,7 @@ This is a research demonstration, not a production QKD system.
 
 - **Signaling server**: room creation, SDP/ICE relay, connection lifecycle management
 - **WebRTC video**: peer-to-peer video and audio between browsers
-- **BB84 key exchange**: full protocol over DataChannel — basis sifting, QBER estimation, block-parity error correction, and privacy amplification by a per-round seeded Toeplitz hash (leftover hashing): Alice draws the seed from the crypto RNG, transmits it, and both sides distill the same 128-bit key with the same matrix. Parity bits disclosed during error correction are subtracted from the key budget; a round that cannot cover the 128-bit target aborts rather than shrinking the key.
+- **BB84 key exchange**: full protocol over DataChannel — basis sifting, QBER estimation, Cascade error correction, and privacy amplification by a per-round seeded Toeplitz hash (leftover hashing): Alice draws the seed from the crypto RNG, transmits it, and both sides distill the same 128-bit key with the same matrix. Every parity bit disclosed during error correction, and the verification hash, is subtracted from the key budget; a mint that cannot cover the 128-bit target aborts rather than shrinking the key.
 - **Eavesdropper detection**: intercept-resend attacks raise QBER above the 11% threshold, triggering automatic key rejection and re-exchange
 - **BB84 keys drive the frame encryption**: on round completion the derived key is posted to the crypto worker (`setEncryptionKey` → `set-key`), and the AES-128-GCM Insertable Streams transforms (installed on every sender/receiver at connection setup) begin encrypting. The worker is **fail-closed**: until a key is installed it drops frames rather than passing them in the clear, and the in-call pill reports the worker's own state (amber establishing / green encrypted / red not-encrypted). Requires `RTCRtpScriptTransform` support in the browser.
 - **Hardened signaling**: capability-token rooms, fail-closed admin auth (`QVC_ADMIN_SECRET`), per-IP rate limiting (`QVC_RATE_LIMIT`, default 30/min), anchored CORS origins, and redacted dashboards/logs. See `docs/THREAT_MODEL.md` for the full attack-surface table.
@@ -94,7 +94,7 @@ This is a research demonstration, not a production QKD system.
 
 ### Continuous key reservoir
 
-- **Streaming key production**: keys are not minted one round at a time. A reservoir engine streams frames from a pluggable *frame source*, sifts and QBER-gates each frame independently, pools the accepted bits, and distills a key (pooled block-parity correction, a verification-hash correctness check, then Toeplitz amplification) whenever the pool covers a key plus its disclosure leakage — rotating keys into the crypto worker on a floored cadence. This is the shape deployed QKD stacks use (see `docs/HARDWARE.md`).
+- **Streaming key production**: keys are not minted one round at a time. A reservoir engine streams frames from a pluggable *frame source*, sifts and QBER-gates each frame independently, pools the accepted bits, and distills a key (Cascade correction over the pool, a verification-hash correctness check, then Toeplitz amplification) whenever the pool covers a key plus its disclosure leakage — rotating keys into the crypto worker on a floored cadence. This is the shape deployed QKD stacks use (see `docs/HARDWARE.md`).
 
 ### Backends: simulated and (emulated) optical
 

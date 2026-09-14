@@ -1,19 +1,20 @@
 /**
- * Pooled distillation: both ends must mint identical keys, correction must
- * actually correct, the verification hash must catch divergence, and every
- * disclosed bit must be budgeted.
+ * Pooled distillation: both ends must mint identical keys, Cascade must
+ * correct errors wherever they fall, the verification hash must catch
+ * divergence, and every disclosed bit must be budgeted and bounded.
  */
 import {
   distillSource,
   distillDetector,
   mintable,
   leakage,
+  cascadeBlockSizes,
   privacyAmplify,
   DistillError,
-  PARITY_BLOCK_SIZE,
+  CASCADE_PASSES,
   VERIFY_HASH_BITS,
 } from '../../../website/client/static/js/bench/distill.js';
-import { randomBits } from '../../../website/client/static/js/bench/packing.js';
+import { randomBits, packBits, toB64 } from '../../../website/client/static/js/bench/packing.js';
 
 /** Two in-memory typed streams wired to each other. */
 function ioPair() {
@@ -41,16 +42,35 @@ function ioPair() {
   return [make(0, 1), make(1, 0)];
 }
 
-describe('mint budget accounting', () => {
-  test('leakage counts parities AND the verification hash', () => {
-    expect(leakage(800)).toBe(Math.ceil(800 / PARITY_BLOCK_SIZE) + VERIFY_HASH_BITS);
+describe('cascade schedule', () => {
+  test('first block ≈ 0.73 / QBER, doubling each pass, capped at half the pool', () => {
+    expect(cascadeBlockSizes(2000, 0.05)).toEqual([15, 30, 60, 120, 240, 480]);
+    expect(cascadeBlockSizes(2000, 0.01)).toEqual([64, 128, 256, 512, 1000, 1000]);
+    expect(cascadeBlockSizes(2000, 0.01)).toHaveLength(CASCADE_PASSES);
   });
 
-  test('mintable only when the pool covers target plus all disclosure', () => {
+  test('small pools keep at least 16 first-pass blocks', () => {
+    expect(cascadeBlockSizes(500, 0.01)[0]).toBe(31);
+  });
+});
+
+describe('mint budget accounting', () => {
+  test('leakage counts every pass of parities, bisection, AND the verification hash', () => {
+    const blockParities = cascadeBlockSizes(800).reduce((sum, k) => sum + Math.ceil(800 / k), 0);
+    expect(leakage(800)).toBeGreaterThan(blockParities + VERIFY_HASH_BITS);
+  });
+
+  test('a noisier pool needs more bits before it can mint', () => {
+    expect(leakage(1000, 0.08)).toBeGreaterThan(leakage(1000, 0.02));
+    expect(mintable(1000, 128, 0.02)).toBe(true);
+    expect(mintable(600, 128, 0.11)).toBe(false);
+  });
+
+  test('mintable only when the pool covers target plus expected disclosure', () => {
     expect(mintable(128, 128)).toBe(false);
-    expect(mintable(300, 128)).toBe(true);
-    expect(mintable(220, 128)).toBe(true); // 220 − (28 parities + 64 hash) = 128 exactly
-    expect(mintable(219, 128)).toBe(false); // one bit short
+    const n = Array.from({ length: 2000 }, (_, i) => i).find((len) => mintable(len, 128));
+    expect(n - leakage(n)).toBeGreaterThanOrEqual(128);
+    expect(n - 1 - leakage(n - 1)).toBeLessThan(128);
   });
 });
 
@@ -83,6 +103,8 @@ describe('reconciliation at realistic QBER', () => {
     [0.01, 11],
     [0.03, 12],
     [0.05, 13],
+    [0.08, 14],
+    [0.11, 15],
   ])('errors at random positions (QBER %f) are corrected and keys match', async (qber, seed) => {
     const pool = Array.from(randomBits(2000));
     const noisy = withErrors(pool, qber, seed);
@@ -110,7 +132,7 @@ describe('distillation', () => {
   test('a single flipped bit is corrected and keys still match', async () => {
     const pool = Array.from(randomBits(600));
     const noisy = [...pool];
-    noisy[40] ^= 1; // first bit of block 5 — exactly what block parity fixes
+    noisy[43] ^= 1;
     const [a, b] = ioPair();
     const [srcKey, detKey] = await Promise.all([
       distillSource([...pool], a, { mintId: 1 }),
@@ -119,22 +141,57 @@ describe('distillation', () => {
     expect(Array.from(detKey)).toEqual(Array.from(srcKey));
   });
 
-  test('uncorrectable divergence trips the verification hash, never mints', async () => {
+  test('residual divergence trips the verification hash, never mints', async () => {
     const pool = Array.from(randomBits(600));
-    const noisy = [...pool];
-    // Two errors in one block: parity matches, correction is blind to it —
-    // the exact failure class the verification hash exists to catch.
-    noisy[81] ^= 1;
-    noisy[82] ^= 1;
     const [a, b] = ioPair();
-    const results = await Promise.allSettled([
-      distillSource([...pool], a, { mintId: 2 }),
-      distillDetector(noisy, b, { mintId: 2 }),
-    ]);
-    expect(results[0].status).toBe('rejected');
-    expect(results[0].reason).toBeInstanceOf(DistillError);
-    expect(results[0].reason.reason).toBe('verify');
-    expect(results[1].status).toBe('rejected');
+    // A detector that skips correction and reports its uncorrected pool: the
+    // failure class the verification hash exists to catch.
+    const source = distillSource([...pool], a, { mintId: 2, qber: 0.02 });
+    await b.receive(['mint-cascade']);
+    await b.send({ type: 'mint-corrected', mintId: 2 });
+    await b.send({ type: 'mint-verify', mintId: 2, hash: 'not-the-hash' });
+    await expect(source).rejects.toMatchObject({ name: 'DistillError', reason: 'verify' });
+    const verdict = await b.receive(['mint-verdict']);
+    expect(verdict.ok).toBe(false);
+  });
+
+  test('the source stops answering once disclosure would exceed the key budget', async () => {
+    const pool = Array.from(randomBits(600));
+    const [a, b] = ioPair();
+    const source = distillSource([...pool], a, { mintId: 6, qber: 0.02 });
+    await b.receive(['mint-cascade']);
+    // Single-bit "parities" are the pool itself; the budget must cut this off.
+    let answered = 0;
+    for (let start = 0; start < pool.length; start += 50) {
+      const ranges = [];
+      for (let i = start; i < start + 50; i++) ranges.push(0, i, i + 1);
+      await b.send({ type: 'mint-parity-query', mintId: 6, ranges });
+      const reply = await b.receive(['mint-parity-reply', 'mint-abort']);
+      if (reply.type === 'mint-abort') break;
+      answered += 50;
+    }
+    await expect(source).rejects.toMatchObject({ reason: 'budget' });
+    expect(answered).toBeLessThanOrEqual(pool.length - VERIFY_HASH_BITS - 128);
+  });
+
+  test('malformed or out-of-range parity queries are rejected', async () => {
+    const [a, b] = ioPair();
+    const source = distillSource(Array.from(randomBits(600)), a, { mintId: 7, qber: 0.02 });
+    await b.receive(['mint-cascade']);
+    await b.send({ type: 'mint-parity-query', mintId: 7, ranges: [0, 10, 5000] });
+    await expect(source).rejects.toMatchObject({ reason: 'protocol' });
+  });
+
+  test('a malformed cascade setup is rejected by the detector', async () => {
+    const [, b] = ioPair();
+    const detector = distillDetector(Array.from(randomBits(600)), b, { mintId: 8 });
+    await b.send.peerInject({
+      type: 'mint-cascade',
+      mintId: 8,
+      blockSizes: [0, 0, 0],
+      permSeed: toB64(packBits(Array.from(randomBits(128)))),
+    });
+    await expect(detector).rejects.toMatchObject({ reason: 'protocol' });
   });
 
   test('a pool below budget refuses to mint at all', async () => {
@@ -147,9 +204,9 @@ describe('distillation', () => {
   test('mint ids are enforced on every message', async () => {
     const pool = Array.from(randomBits(600));
     const [, b] = ioPair();
-    // Feed the detector a parities message from the WRONG mint.
+    // Feed the detector a cascade setup from the WRONG mint.
     const detector = distillDetector([...pool], b, { mintId: 5 });
-    await b.send.peerInject({ type: 'mint-parities', mintId: 4, parities: 'AAAA' });
+    await b.send.peerInject({ type: 'mint-cascade', mintId: 4, blockSizes: [], permSeed: '' });
     await expect(detector).rejects.toThrow(/mint id mismatch/);
   });
 });
