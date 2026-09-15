@@ -11,6 +11,7 @@
 /* ── State ──────────────────────────────────────────────────────── */
 const state = {
   signalingConnected: false,
+  callReady: false, // the WebRTC manager and key engine exist, so a session can start
   peerConnected: false,
   roomId: '',
   isInitiator: false,
@@ -292,7 +293,10 @@ function connectToSignaling(url) {
       webrtcManager.on('crypto-metrics', (msg) => {
         state.cryptoMetrics = msg;
       });
+      state.callReady = true;
+      render();
     },
+    () => showToast('The call components failed to load. Reload the page to try again.', 'error'),
   );
 }
 
@@ -676,6 +680,15 @@ async function handleCreateRoom() {
   webrtcManager.createRoom();
 }
 
+/**
+ * Start Session and Join act only once signaling is up AND the call machinery
+ * has loaded; the socket usually connects first, and a click before the
+ * machinery exists would do nothing.
+ */
+function lobbyReady() {
+  return state.signalingConnected && state.callReady;
+}
+
 /** Whether a key was ever installed this session (derived, not tracked). */
 function hasBeenEncrypted() {
   return state.keyIndex !== null;
@@ -1018,11 +1031,11 @@ function render() {
           </div>
           <p class="lobby-hint">Send this link to the person you want to call.</p>`
                 : `${state.invited ? `<p class="lobby-invited">You’ve been invited to a call — join below, or start your own.</p>` : ''}
-          <button class="btn ${state.invited ? '' : 'btn--primary'}" onclick="handleCreateRoom()" ${!state.signalingConnected ? 'disabled' : ''}>Start Session</button>
+          <button class="btn ${state.invited ? '' : 'btn--primary'}" onclick="handleCreateRoom()" ${lobbyReady() ? '' : 'disabled'}>Start Session</button>
           ${state.mediaError ? `<div class="form-error">${state.mediaError}</div>` : ''}
           <form onsubmit="handleJoinRoom(event)" class="join-form">
-            <input id="room-input" type="text" placeholder="Paste invite link" autocomplete="off" ${!state.signalingConnected ? 'disabled' : ''}>
-            <button type="submit" class="btn ${state.invited ? 'btn--primary' : ''}" ${!state.signalingConnected ? 'disabled' : ''}>Join</button>
+            <input id="room-input" type="text" placeholder="Paste invite link" autocomplete="off" ${lobbyReady() ? '' : 'disabled'}>
+            <button type="submit" class="btn ${state.invited ? 'btn--primary' : ''}" ${lobbyReady() ? '' : 'disabled'}>Join</button>
           </form>
           <div class="optical">
             <label class="optical-toggle">

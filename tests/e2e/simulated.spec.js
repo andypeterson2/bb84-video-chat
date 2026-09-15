@@ -33,3 +33,16 @@ test('two peers establish an encrypted call and agree on the SAS', async ({ brow
     await bob.close();
   }
 });
+
+test('Start Session works when the call machinery loads after signaling connects', async ({
+  page,
+}) => {
+  // The signaling socket connects before the ICE servers arrive, the last step
+  // before a session can start; the click must still produce an invite.
+  await fastTimers(page);
+  await page.route('**/ice-servers', async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  expect(await createRoom(page)).toMatch(/^[A-Za-z0-9_-]{16,}$/);
+});

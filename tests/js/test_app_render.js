@@ -56,6 +56,22 @@ describe('lobby rendering', () => {
     expect(document.getElementById('room-input')).not.toBeNull();
   });
 
+  test('Start Session and Join stay disabled until signaling AND the call machinery are ready', () => {
+    const controls = () =>
+      ['.lobby-actions > .btn', '#room-input', '.join-form button[type="submit"]'].map(
+        (sel) => document.querySelector(sel).disabled,
+      );
+    app.state.signalingConnected = true;
+    app.render();
+    expect(controls()).toEqual([true, true, true]);
+    app.state.callReady = true;
+    app.render();
+    expect(controls()).toEqual([false, false, false]);
+    app.state.signalingConnected = false;
+    app.render();
+    expect(controls()).toEqual([true, true, true]);
+  });
+
   test('invite link and copy control appear while waiting for a peer', () => {
     app.state.joinLink = 'https://example.test/#room=abcdefghijklmnop';
     app.state.waitingForPeer = true;
