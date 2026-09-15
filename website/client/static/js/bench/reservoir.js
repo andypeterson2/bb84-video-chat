@@ -193,7 +193,7 @@ export class ReservoirEngine {
     this._exhausted = false;
     this._failures = 0;
     this._sessionN = -1;
-    this._session = null; // {router, abort, n}
+    this._session = null; // {n, abort, router, channel}
     this._frameId = 0;
     this._mintId = 0;
     this._keyIndex = 0;
@@ -279,11 +279,7 @@ export class ReservoirEngine {
       if (this._isSource && !this._session) {
         // The peer's session is long dead; announce the fresh one so its
         // listener rejoins (same advisory control path as failure restarts).
-        const next = this._sessionN + 1;
-        this._ensureControl()
-          .send({ type: 'session-restart', session: next })
-          .catch(() => {});
-        this._startSession(next);
+        this._announceSession(this._sessionN + 1);
       }
     }
   }
@@ -337,18 +333,34 @@ export class ReservoirEngine {
     if (this._destroyed || this._session) return;
     if (this._isSource && this._exhausted) return;
     this._sessionN = n;
+    // Mint ids count within a session: a mint one side began just before its
+    // peer's session died would otherwise leave the two counters apart for good.
+    this._mintId = 0;
     const abort = new AbortController();
     // On teardown the abort signal rejects the pending mux read, so the router's
     // pump exits instead of lingering as a second reader on the classical channel.
     const channel = this._makeChannel(`frames-${n}`, abort.signal);
     const router = new MessageRouter(channel);
-    this._session = { n, abort, router, channel };
+    const session = { n, abort, router, channel };
+    this._session = session;
     this._onState({ phase: 'streaming', session: n });
 
     const run = this._isSource
-      ? this._runSourceSession(router, abort)
-      : this._runDetectorSession(router, abort);
-    run.catch((err) => this._onSessionFailure(err));
+      ? this._runSourceSession(session)
+      : this._runDetectorSession(session);
+    run.catch((err) => this._onSessionFailure(err, session));
+  }
+
+  /**
+   * Announce session `next`, then open it. The announcement must reach the wire
+   * before the session's first frame: the detector flushes buffered classical
+   * traffic when an announcement arrives. @private
+   */
+  _announceSession(next) {
+    this._ensureControl()
+      .send({ type: 'session-restart', session: next })
+      .catch(() => {})
+      .then(() => this._startSession(next));
   }
 
   _teardownSession(reason) {
@@ -377,8 +389,9 @@ export class ReservoirEngine {
     this._installTimer = null;
   }
 
-  _onSessionFailure(err) {
-    if (this._destroyed || !this._session) return;
+  _onSessionFailure(err, session) {
+    // A session already torn down fails late; that must not end its successor.
+    if (this._destroyed || this._session !== session) return;
     this._teardownSession('failure');
     this._failures++;
     const reason =
@@ -400,39 +413,36 @@ export class ReservoirEngine {
     if (this._isSource) {
       this._restartTimer = setTimeout(() => {
         if (this._destroyed || this._exhausted) return;
-        const next = this._sessionN + 1;
-        this._ensureControl()
-          .send({ type: 'session-restart', session: next })
-          .catch(() => {});
-        this._startSession(next);
+        this._announceSession(this._sessionN + 1);
       }, sessionRestartDelayMs());
     }
   }
 
   /* ── Source side ──────────────────────────────────────────────── */
 
-  async _runSourceSession(router, abort) {
-    const frames = router.stream('frame');
+  async _runSourceSession(session) {
+    const frames = session.router.stream('frame');
     await this._source.start({ slotsPerFrame: this._slots });
-    while (this._session && this._session.router === router) {
+    while (this._session === session) {
       if (this._pendingKeys.length >= POOL_KEY_CAP) {
         // Reservoir full: idle without opening frames (flow control).
-        await delay(framePeriodMs(), abort.signal);
+        await delay(framePeriodMs(), session.abort.signal);
         continue;
       }
-      await this._runSourceFrame(frames, abort);
-      this._maybeMint(router);
-      await delay(framePeriodMs(), abort.signal);
+      await this._runSourceFrame(frames, session);
+      this._maybeMint(session);
+      await delay(framePeriodMs(), session.abort.signal);
     }
   }
 
-  async _runSourceFrame(frames, abort) {
+  async _runSourceFrame(frames, session) {
+    const { channel } = session;
     const frameId = this._frameId++;
-    const deadline = withDeadline(abort.signal, frameDeadlineMs());
+    const deadline = withDeadline(session.abort.signal, frameDeadlineMs());
     try {
       const bits = randomBits(this._slots);
       const bases = randomBits(this._slots);
-      await this._session.channel.send({ type: 'frame-open', frameId, slots: this._slots });
+      await channel.send({ type: 'frame-open', frameId, slots: this._slots });
       await this._source.transmit({ frameId, bits, bases });
 
       const det = await frames.receive(['frame-detections'], deadline.signal);
@@ -440,7 +450,7 @@ export class ReservoirEngine {
       const indices = decodeIndices(fromB64OrThrow(det.indices));
       const detBases = unpackBits(fromB64OrThrow(det.bases), indices.length);
       const { keyBits, basesAtIndices } = siftSource(bits, bases, indices, detBases);
-      await this._session.channel.send({
+      await channel.send({
         type: 'frame-bases',
         frameId,
         bases: toB64(packBits(basesAtIndices)),
@@ -449,7 +459,7 @@ export class ReservoirEngine {
 
       const positions = chooseSamplePositions(keyBits.length);
       const { sample, remaining } = splitSample(keyBits, positions);
-      await this._session.channel.send({
+      await channel.send({
         type: 'frame-sample',
         frameId,
         positions: toB64(encodeIndices(positions)),
@@ -461,7 +471,7 @@ export class ReservoirEngine {
       const theirValues = unpackBits(fromB64OrThrow(resp.values), sample.length);
       const qber = estimateQber(sample, Array.from(theirValues));
 
-      await this._exchangeVerdict(frames, deadline.signal, {
+      await this._exchangeVerdict(frames, channel, deadline.signal, {
         frameId,
         qber,
         remaining,
@@ -474,28 +484,29 @@ export class ReservoirEngine {
 
   /* ── Detector side ────────────────────────────────────────────── */
 
-  async _runDetectorSession(router, abort) {
-    const frames = router.stream('frame');
+  async _runDetectorSession(session) {
+    const frames = session.router.stream('frame');
     await this._source.start({ slotsPerFrame: this._slots });
-    while (this._session && this._session.router === router) {
-      const watchdog = withDeadline(abort.signal, streamWatchdogMs());
+    while (this._session === session) {
+      const watchdog = withDeadline(session.abort.signal, streamWatchdogMs());
       let open;
       try {
         open = await frames.receive(['frame-open'], watchdog.signal);
       } finally {
         watchdog.clear();
       }
-      await this._runDetectorFrame(frames, abort, open);
-      this._maybeMint(router);
+      await this._runDetectorFrame(frames, session, open);
+      this._maybeMint(session);
     }
   }
 
-  async _runDetectorFrame(frames, abort, open) {
+  async _runDetectorFrame(frames, session, open) {
+    const { channel } = session;
     const frameId = open.frameId;
-    const deadline = withDeadline(abort.signal, frameDeadlineMs());
+    const deadline = withDeadline(session.abort.signal, frameDeadlineMs());
     try {
       const det = await this._awaitDetections(frameId, deadline.signal);
-      await this._session.channel.send({
+      await channel.send({
         type: 'frame-detections',
         frameId,
         indices: toB64(encodeIndices(Array.from(det.indices))),
@@ -514,7 +525,7 @@ export class ReservoirEngine {
         throw new SessionError('sample positions out of bounds', 'protocol');
       }
       const { sample, remaining } = splitSample(keyBits, positions);
-      await this._session.channel.send({
+      await channel.send({
         type: 'frame-sample-resp',
         frameId,
         values: toB64(packBits(sample)),
@@ -522,7 +533,7 @@ export class ReservoirEngine {
       const theirValues = unpackBits(fromB64OrThrow(sampleMsg.values), sample.length);
       const qber = estimateQber(sample, Array.from(theirValues));
 
-      await this._exchangeVerdict(frames, deadline.signal, {
+      await this._exchangeVerdict(frames, channel, deadline.signal, {
         frameId,
         qber,
         remaining,
@@ -574,10 +585,10 @@ export class ReservoirEngine {
 
   /* ── Shared frame tail: verdicts, pooling, telemetry ──────────── */
 
-  async _exchangeVerdict(frames, signal, frame) {
+  async _exchangeVerdict(frames, channel, signal, frame) {
     const { frameId, qber, remaining, stats } = frame;
     const accept = qber <= QBER_THRESHOLD;
-    await this._session.channel.send({ type: 'frame-verdict', frameId, qber, accept });
+    await channel.send({ type: 'frame-verdict', frameId, qber, accept });
     const theirs = await frames.receive(['frame-verdict'], signal);
     requireFrame(theirs, frameId);
     const accepted = accept && theirs.accept === true;
@@ -617,35 +628,36 @@ export class ReservoirEngine {
     return this._pool.length > 0 ? this._poolErrors / this._pool.length : DEFAULT_QBER;
   }
 
-  _maybeMint(router) {
-    if (this._mintRunning || !this._session || this._session.router !== router) return;
+  _maybeMint(session) {
+    if (this._mintRunning || this._session !== session) return;
     if (!mintable(this._pool.length, TARGET_KEY_BITS, this._poolQber())) return;
     if (this._pendingKeys.length >= POOL_KEY_CAP) return;
     this._mintRunning = true;
-    this._runMint(router)
-      .catch((err) => this._onSessionFailure(err))
+    this._runMint(session)
+      .catch((err) => this._onSessionFailure(err, session))
       .finally(() => {
-        this._mintRunning = false;
+        // Teardown already cleared the flag; a successor session may have set it.
+        if (this._session === session) this._mintRunning = false;
       });
   }
 
-  async _runMint(router) {
-    const mints = router.stream('mint');
+  async _runMint(session) {
+    const mints = session.router.stream('mint');
     const mintId = this._mintId++;
     const qber = this._poolQber();
     const pool = this._pool.splice(0);
     this._poolErrors = 0;
     const frameIds = this._acceptedFrames.splice(0);
     const io = {
-      send: (msg) => this._session.channel.send(msg),
-      receive: (types) => mints.receive(types, this._session.abort.signal),
+      send: (msg) => session.channel.send(msg),
+      receive: (types) => mints.receive(types, session.abort.signal),
     };
     let key;
     if (this._isSource) {
       await io.send({ type: 'mint-begin', mintId, frameIds, poolLen: pool.length });
       key = await distillSource(pool, io, { mintId, target: TARGET_KEY_BITS, qber });
     } else {
-      const begin = await mints.receive(['mint-begin'], this._session.abort.signal);
+      const begin = await io.receive(['mint-begin']);
       if (
         begin.mintId !== mintId ||
         begin.poolLen !== pool.length ||

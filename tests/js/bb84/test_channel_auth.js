@@ -30,6 +30,19 @@ async function authPair(options = {}) {
   return p;
 }
 
+/** A tamper that corrupts the first classical message of `type` alice sends. */
+function corruptAlicesFirst(type) {
+  let done = false;
+  return (self, data) => {
+    if (self !== 'alice' || done) return data;
+    const msg = JSON.parse(data);
+    if (msg.ch !== 'classical' || JSON.parse(msg.payload.payload).type !== type) return data;
+    done = true;
+    msg.payload.payload = JSON.stringify({ type: 'evil' });
+    return JSON.stringify(msg);
+  };
+}
+
 /** Two muxes wired together like an ordered, reliable DataChannel. */
 function muxPair() {
   const peers = {};
@@ -122,6 +135,18 @@ describe('AuthenticatedClassicalChannel', () => {
     // Replay the captured wire message verbatim.
     muxA._sendFn(wires[0]);
     await expect(b.receive()).rejects.toThrow(/sequence violation/);
+  });
+
+  test('concurrent sends reach the wire in sequence order however signing interleaves', async () => {
+    const { a, b, authA } = await authChannelPair();
+    const sign = authA.sign.bind(authA);
+    authA.sign = async (kind, seq, payload) => {
+      if (seq === 0) await new Promise((r) => setTimeout(r, 20)); // the first signs last
+      return sign(kind, seq, payload);
+    };
+    await Promise.all([a.send({ type: 'first' }), a.send({ type: 'second' })]);
+    expect(await b.receive()).toEqual({ type: 'first' });
+    expect(await b.receive()).toEqual({ type: 'second' });
   });
 
   test('wrong-token peers abort on the first message', async () => {
@@ -253,21 +278,7 @@ describe('Orchestrator auth integration', () => {
   });
 
   test('one tampered frame message costs a session; the restart recovers', async () => {
-    // Let the fp commit/reveal (4 classical envelopes) and negotiation
-    // through, then corrupt one later frame message from alice.
-    let aliceClassical = 0;
-    const tamper = (self, data) => {
-      if (self !== 'alice') return data;
-      const msg = JSON.parse(data);
-      if (msg.ch !== 'classical') return data;
-      aliceClassical++;
-      if (aliceClassical === 7) {
-        msg.payload.payload = JSON.stringify({ type: 'evil' });
-        return JSON.stringify(msg);
-      }
-      return data;
-    };
-    const p = await authPair({ tamper });
+    const p = await authPair({ tamper: corruptAlicesFirst('frame-verdict') });
     try {
       await p.untilMinted(1);
       // Bob saw an integrity/protocol fault, not a permanent MITM latch, and
@@ -275,6 +286,36 @@ describe('Orchestrator auth integration', () => {
       const sasA = phase(p, 'alice', 'sas').at(-1).sas;
       const sasB = phase(p, 'bob', 'sas').at(-1).sas;
       expect(sasA).toEqual(sasB);
+      keysAgree(p);
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('a restart announcement that signs slowly still precedes the new session', async () => {
+    // The detector flushes buffered classical traffic when an announcement
+    // arrives, so a frame that overtakes it on the wire is lost.
+    const p = await authPair({ tamper: corruptAlicesFirst('frame-verdict') });
+    const sign = p.alice._auth.sign.bind(p.alice._auth);
+    p.alice._auth.sign = async (kind, ...rest) => {
+      if (kind === 'control') await new Promise((r) => setTimeout(r, 25));
+      return sign(kind, ...rest);
+    };
+    try {
+      await p.untilMinted(1);
+      keysAgree(p);
+      expect(has(p.states.alice, (s) => s.phase === 'exhausted')).toBe(false);
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('a mint one side began as its peer failed does not stall the next session', async () => {
+    // One frame fills a mintable pool, so alice pools it and begins a mint,
+    // while bob fails on her corrupted verdict before pooling it.
+    const p = await authPair({ tamper: corruptAlicesFirst('frame-verdict'), slotsPerFrame: 8192 });
+    try {
+      await p.untilMinted(1);
       keysAgree(p);
     } finally {
       p.destroy();
