@@ -37,7 +37,7 @@ import {
   splitSample,
   estimateQber,
 } from './sift.js';
-import { distillSource, distillDetector, mintable, DistillError } from './distill.js';
+import { distillSource, distillDetector, mintable, DistillError, DEFAULT_QBER } from './distill.js';
 import { DEFAULT_SLOTS_PER_FRAME } from './frame-source.js';
 
 const QBER_THRESHOLD = 0.11;
@@ -198,6 +198,7 @@ export class ReservoirEngine {
     this._mintId = 0;
     this._keyIndex = 0;
     this._pool = [];
+    this._poolErrors = 0;
     this._acceptedFrames = [];
     this._mintRunning = false;
     this._pendingKeys = [];
@@ -358,6 +359,7 @@ export class ReservoirEngine {
     s.router.close();
     // Bits accumulated in a dead session cannot align with a fresh one.
     this._pool = [];
+    this._poolErrors = 0;
     this._acceptedFrames = [];
     this._mintRunning = false;
     for (const [, w] of this._detectionWaiters) w.reject(new MuxAbortError('session down', reason));
@@ -581,6 +583,7 @@ export class ReservoirEngine {
     const accepted = accept && theirs.accept === true;
     if (accepted) {
       this._pool.push(...remaining);
+      this._poolErrors += qber * remaining.length;
       this._acceptedFrames.push(frameId);
       this._failures = 0;
       this._exhausted = false;
@@ -602,16 +605,21 @@ export class ReservoirEngine {
       qber,
       accepted,
       pooledBits: this._pool.length,
-      mintBudget: mintBudgetBits(this._pool.length),
+      mintBudget: mintBudgetBits(this._pool.length, this._poolQber()),
       ...stats,
     });
   }
 
   /* ── Minting & rotation ───────────────────────────────────────── */
 
+  /** Error-rate estimate for the pooled bits: each accepted frame's QBER, weighted by its bits. */
+  _poolQber() {
+    return this._pool.length > 0 ? this._poolErrors / this._pool.length : DEFAULT_QBER;
+  }
+
   _maybeMint(router) {
     if (this._mintRunning || !this._session || this._session.router !== router) return;
-    if (!mintable(this._pool.length, TARGET_KEY_BITS)) return;
+    if (!mintable(this._pool.length, TARGET_KEY_BITS, this._poolQber())) return;
     if (this._pendingKeys.length >= POOL_KEY_CAP) return;
     this._mintRunning = true;
     this._runMint(router)
@@ -624,7 +632,9 @@ export class ReservoirEngine {
   async _runMint(router) {
     const mints = router.stream('mint');
     const mintId = this._mintId++;
+    const qber = this._poolQber();
     const pool = this._pool.splice(0);
+    this._poolErrors = 0;
     const frameIds = this._acceptedFrames.splice(0);
     const io = {
       send: (msg) => this._session.channel.send(msg),
@@ -633,7 +643,7 @@ export class ReservoirEngine {
     let key;
     if (this._isSource) {
       await io.send({ type: 'mint-begin', mintId, frameIds, poolLen: pool.length });
-      key = await distillSource(pool, io, { mintId, target: TARGET_KEY_BITS });
+      key = await distillSource(pool, io, { mintId, target: TARGET_KEY_BITS, qber });
     } else {
       const begin = await mints.receive(['mint-begin'], this._session.abort.signal);
       if (
@@ -708,11 +718,11 @@ export function decodePeerDetections(p) {
   }
 }
 
-function mintBudgetBits(poolLen) {
+function mintBudgetBits(poolLen, qber) {
   // Display value: bits still needed before a mint can run.
   let need = TARGET_KEY_BITS;
   for (let n = poolLen; ; n++) {
-    if (mintable(n, TARGET_KEY_BITS)) {
+    if (mintable(n, TARGET_KEY_BITS, qber)) {
       need = n;
       break;
     }
