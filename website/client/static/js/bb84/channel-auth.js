@@ -205,13 +205,22 @@ export class AuthenticatedClassicalChannel {
     this._kind = kind;
     this._sendSeq = 0;
     this._recvSeq = 0;
+    this._sendTail = Promise.resolve();
   }
 
+  /**
+   * Concurrent sends sign in parallel but reach the wire in sequence order:
+   * signing completes out of order, and the peer rejects any sequence gap.
+   */
   async send(data) {
     const payload = JSON.stringify(data);
     const seq = this._sendSeq++;
-    const tag = await this._auth.sign(this._kind, seq, payload);
-    await this._inner.send({ v: 1, seq, payload, tag });
+    const tag = this._auth.sign(this._kind, seq, payload);
+    const sent = this._sendTail.then(async () =>
+      this._inner.send({ v: 1, seq, payload, tag: await tag }),
+    );
+    this._sendTail = sent.catch(() => {});
+    return sent;
   }
 
   async receive() {
