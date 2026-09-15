@@ -226,10 +226,15 @@ describe('reservoir failure semantics', () => {
         },
         { timeout: 8000, interval: 25 },
       );
-      const s = p.installed.source.at(-1);
-      const d = p.installed.detector.at(-1);
-      expect(s.keyIndex).toBe(d.keyIndex);
-      expect(Array.from(s.key)).toEqual(Array.from(d.key));
+      // The source installs a key a beat before the detector, so compare every
+      // key both have installed rather than each side's latest.
+      const n = Math.min(p.installed.source.length, p.installed.detector.length);
+      for (let i = 0; i < n; i++) {
+        const s = p.installed.source[i];
+        const d = p.installed.detector[i];
+        expect(s.keyIndex).toBe(d.keyIndex);
+        expect(Array.from(s.key)).toEqual(Array.from(d.key));
+      }
     } finally {
       p.destroy();
     }
