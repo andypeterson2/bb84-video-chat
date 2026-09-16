@@ -7,8 +7,7 @@ against these ABCs — an AWG/laser driver, a timetagger SDK wrapper, a
 polarization-controller driver — and configuring the fiber-link stanza off.
 Nothing else changes.
 
-This module is the deliverable of the whole effort: `docs/HARDWARE.md`
-documents these contracts, their units, and clock semantics.
+These ABCs carry the contracts, their units and the clock semantics.
 """
 
 from __future__ import annotations

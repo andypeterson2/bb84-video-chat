@@ -71,8 +71,8 @@ Each daemon prints a one-time **pairing token** to stdout. In the lobby, tick
 creator uses the source daemon, the joiner uses the detector daemon. Optical
 mode engages only when both peers present complementary benches; otherwise the
 call falls back to the simulator. See `bench/bench.toml.example` for every
-knob (APD and SNSPD presets included) and `docs/HARDWARE.md` for the contract
-that swaps the emulated instruments for real optics.
+knob (APD and SNSPD presets included); the driver ABCs in `bench/drivers.py`
+are the contract that swaps the emulated instruments for real optics.
 
 The daemon is asyncio + `websockets`, deliberately **process-isolated** from
 the eventlet-based signaling server (they share no code or process); an
@@ -89,17 +89,17 @@ This is a research demonstration, not a production QKD system.
 - **BB84 key exchange**: full protocol over DataChannel — basis sifting, QBER estimation, Cascade error correction, and privacy amplification by a per-round seeded Toeplitz hash (leftover hashing): Alice draws the seed from the crypto RNG, transmits it, and both sides distill the same 128-bit key with the same matrix. Every parity bit disclosed during error correction, and the verification hash, is subtracted from the key budget; a mint that cannot cover the 128-bit target aborts rather than shrinking the key.
 - **Eavesdropper detection**: intercept-resend attacks raise QBER above the 11% threshold, triggering automatic key rejection and re-exchange
 - **BB84 keys drive the frame encryption**: on round completion the derived key is posted to the crypto worker (`setEncryptionKey` → `set-key`), and the AES-128-GCM Insertable Streams transforms (installed on every sender/receiver at connection setup) begin encrypting. The worker is **fail-closed**: until a key is installed it drops frames rather than passing them in the clear, and the in-call pill reports the worker's own state (amber establishing / green encrypted / red not-encrypted). Requires `RTCRtpScriptTransform` support in the browser.
-- **Hardened signaling**: capability-token rooms, fail-closed admin auth (`QVC_ADMIN_SECRET`), per-IP rate limiting (`QVC_RATE_LIMIT`, default 30/min), anchored CORS origins, and redacted dashboards/logs. See `docs/THREAT_MODEL.md` for the full attack-surface table.
+- **Hardened signaling**: capability-token rooms, fail-closed admin auth (`QVC_ADMIN_SECRET`), per-IP rate limiting (`QVC_RATE_LIMIT`, default 30/min), anchored CORS origins, and redacted dashboards/logs.
 - **Authenticated classical channel**: per-direction HMAC keys derived (HKDF-SHA-256) from the invite link's capability token authenticate every BB84 classical message ({seq, payload, tag}; tamper/replay/inject → latched `auth-failure`), the DTLS fingerprints are cross-checked over the authenticated channel, and a short authentication string (4 emoji + 6 digits) is displayed under the video for on-camera verification. Two-tier guarantee: authenticated if your invite channel was; verified if you compared the SAS.
 
 ### Continuous key reservoir
 
-- **Streaming key production**: keys are not minted one round at a time. A reservoir engine streams frames from a pluggable *frame source*, sifts and QBER-gates each frame independently, pools the accepted bits, and distills a key (Cascade correction over the pool, a verification-hash correctness check, then Toeplitz amplification) whenever the pool covers a key plus its disclosure leakage — rotating keys into the crypto worker on a floored cadence. This is the shape deployed QKD stacks use (see `docs/HARDWARE.md`).
+- **Streaming key production**: keys are not minted one round at a time. A reservoir engine streams frames from a pluggable *frame source*, sifts and QBER-gates each frame independently, pools the accepted bits, and distills a key (Cascade correction over the pool, a verification-hash correctness check, then Toeplitz amplification) whenever the pool covers a key plus its disclosure leakage — rotating keys into the crypto worker on a floored cadence. This is the shape deployed QKD stacks use.
 
 ### Backends: simulated and (emulated) optical
 
 - **Simulated (default)**: there are no real photons. `SimulatedQuantumChannel` models a Poisson photon source, fiber attenuation, and APD detectors to produce realistic error rates. The mode badge reads `SIMULATED`.
-- **Optical bench (emulated)**: an optional per-peer Python daemon (`bench/`) drives an *emulated* BB84 bench — Poisson emission, per-photon loss, jitter, dead time, dark counts, an unknown clock offset + drift, and Qubit4Sync-style clock recovery — over an emulated fiber between the two daemons. Everything above the driver ABCs is the code a **real** bench would run; `docs/HARDWARE.md` is the swap contract. The badge reads `OPTICAL (emulated)` and never claims physical security.
+- **Optical bench (emulated)**: an optional per-peer Python daemon (`bench/`) drives an *emulated* BB84 bench — Poisson emission, per-photon loss, jitter, dead time, dark counts, an unknown clock offset + drift, and Qubit4Sync-style clock recovery — over an emulated fiber between the two daemons. Everything above the driver ABCs is the code a **real** bench would run, and those ABCs in `bench/drivers.py` are the swap contract. The badge reads `OPTICAL (emulated)` and never claims physical security.
 
 ## Tests
 
@@ -169,6 +169,5 @@ tests/
   e2e/               # Playwright two-context specs + daemon launcher
 
 docs/
-  THREAT_MODEL.md    # Attack-surface table + honesty ledger
-  HARDWARE.md        # The real-optics swap contract
+  diagrams/          # PlantUML sources, rendered to png/svg on push
 ```

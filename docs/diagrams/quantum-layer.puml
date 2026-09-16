@@ -50,7 +50,6 @@ note bottom of Drivers
   Everything ABOVE this line ships to
   the real bench unchanged. Real optics
   = concrete drivers here + fiber off.
-  See docs/HARDWARE.md.
 end note
 
 note bottom of Engine
