@@ -110,7 +110,7 @@ pip install pytest
 python -m pytest tests/signaling/ -v
 ```
 
-121 tests: signaling (room management, flow integration incl. connection loss/teardown, and security — admin auth + framework-identical 404, CORS anchoring + legacy-wildcard migration, rate limiting incl. X-Forwarded-For trust rules, log redaction) plus the bench daemon (physics/alignment/slot-recovery fidelity, fiber wire, pairing, WebSocket packing, the transport-free daemon path, and a deterministic two-bench integration run that accumulates a distillable pool). Run from the repo root (`pytest.ini` lives there).
+Covers signaling (room management, flow integration incl. connection loss/teardown, and security — admin auth + framework-identical 404, CORS anchoring + legacy-wildcard migration, rate limiting incl. X-Forwarded-For trust rules, log redaction) plus the bench daemon (physics/alignment/slot-recovery fidelity, fiber wire, pairing, WebSocket packing, the transport-free daemon path, and a deterministic two-bench integration run that accumulates a distillable pool). Run from the repo root (`pytest.ini` lives there).
 
 ### JavaScript (crypto, BB84, reservoir, bench)
 
@@ -119,7 +119,7 @@ npm install
 npm test
 ```
 
-142 tests (Vitest, from the repo root): AES-GCM frame crypto, the reservoir engine over the loopback and daemon backends (streaming, minting, rotation floor, pool cap, per-frame QBER gate, session restart, liveness), sparse sifting + pooled distillation with the correctness verification hash, DataChannel mux hardening, the WebRTC renegotiation guard, app rendering (cipher pill states, SAS strip gating, reservoir dashboard, optical settings, invite flow, room-token parsing), channel authentication (MAC/replay/tamper aborts, the pure fingerprint-bound SAS + commit-then-reveal, retry-then-latch integrity semantics, per-call lifecycle resets), backend negotiation, the daemon WebSocket client, and the signaling client.
+Vitest, from the repo root. Covers AES-GCM frame crypto, the reservoir engine over the loopback and daemon backends (streaming, minting, rotation floor, pool cap, per-frame QBER gate, session restart, liveness), sparse sifting + pooled distillation with the correctness verification hash, DataChannel mux hardening, the WebRTC renegotiation guard, app rendering (cipher pill states, SAS strip gating, reservoir dashboard, optical settings, invite flow, room-token parsing), channel authentication (MAC/replay/tamper aborts, the pure fingerprint-bound SAS + commit-then-reveal, retry-then-latch integrity semantics, per-call lifecycle resets), backend negotiation, the daemon WebSocket client, and the signaling client.
 
 ### End-to-end (Playwright)
 
