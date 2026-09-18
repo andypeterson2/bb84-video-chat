@@ -5,7 +5,7 @@
  * Message envelope: JSON { ch: 'quantum'|'classical', payload: <data> }
  */
 
-/** A receive cancelled by teardown or a round deadline — NOT peer data. */
+/** A receive cancelled by teardown or a round deadline. */
 export class MuxAbortError extends Error {
   constructor(message, reason) {
     super(message);

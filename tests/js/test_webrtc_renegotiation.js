@@ -1,5 +1,5 @@
 /**
- * Renegotiation guard — an offer arriving mid-call must NOT rebuild the peer
+ * Renegotiation guard: an offer arriving mid-call leaves the peer
  * connection. A rebuild replaces the keyed crypto worker with a fresh keyless
  * one: with a pass-through worker that was a silent downgrade to plaintext
  * while the pill still said encrypted; with the fail-closed worker it would
@@ -112,7 +112,7 @@ test('the initiator restarts ICE on a failed connection, reusing the same pc', a
 
   const offers = socket.emitted.filter((e) => e.event === 'offer');
   expect(offers[1].data.iceRestart).toBe(true);
-  expect(FakePeerConnection.instances).toHaveLength(1); // reused, not rebuilt
+  expect(FakePeerConnection.instances).toHaveLength(1); // the same connection is reused
   expect(errors).toHaveLength(0);
 });
 

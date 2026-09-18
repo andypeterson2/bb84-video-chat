@@ -281,7 +281,7 @@ describe('Orchestrator auth integration', () => {
     const p = await authPair({ tamper: corruptAlicesFirst('frame-verdict') });
     try {
       await p.untilMinted(1);
-      // Bob saw an integrity/protocol fault, not a permanent MITM latch, and
+      // Bob saw an integrity or protocol fault, which clears on retry, and
       // the SAS shown on both sides stays identical across the recovery.
       const sasA = phase(p, 'alice', 'sas').at(-1).sas;
       const sasB = phase(p, 'bob', 'sas').at(-1).sas;
@@ -346,9 +346,9 @@ describe('Orchestrator auth integration', () => {
       const sessionBefore = p.bob._engine._sessionN;
       // A raw (unauthenticated) session-restart to a bogus far-future session:
       // over the MAC'd control channel it fails verification and is dropped, so
-      // bob stays on its real session instead of jumping to 999, desyncing from
-      // alice, and ceasing to mint. Assert the session directly, not a fresh
-      // mint, which is timing-fragile under load.
+      // bob stays on its real session instead of jumping to 999 and desyncing from
+      // alice, and ceasing to mint. Assert the session directly, since waiting
+      // for a fresh mint is timing-fragile under load.
       p.bob.handleMessage(
         JSON.stringify({ ch: 'control', payload: { type: 'session-restart', session: 999 } }),
       );

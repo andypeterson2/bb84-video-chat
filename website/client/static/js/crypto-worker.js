@@ -132,7 +132,7 @@ async function decryptFrame(frame, controller) {
   controller.enqueue(frame);
 }
 
-/* ── Message handler (key updates from main thread) ────────────── */
+/* Message handler (key updates from main thread) */
 
 self.onmessage = async (event) => {
   const { type, rawKey, keyIndex } = event.data;
@@ -154,7 +154,7 @@ self.onmessage = async (event) => {
   }
 };
 
-/* ── Insertable Streams handler ────────────────────────────────── */
+/* Insertable Streams handler */
 
 if (typeof self.RTCTransformEvent !== 'undefined' || typeof self.onrtctransform !== 'undefined') {
   self.addEventListener('rtctransform', (event) => {

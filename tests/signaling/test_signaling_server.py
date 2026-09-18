@@ -134,7 +134,7 @@ class TestSignalingFlow:
         created = events_of(env["captured"], "room-created")
         assert len(created) == 1
         room_id = created[0]["data"]["room_id"]
-        # Unguessable capability token, not an enumerable short code.
+        # Unguessable capability token.
         assert len(room_id) >= 20
 
     def test_join_room_notifies_both_peers(self, env):

@@ -90,8 +90,8 @@ export function tuneOpus(sdp, params = OPUS_PARAMS) {
   return out.join(sdp.includes('\r\n') ? '\r\n' : '\n');
 }
 
-/** Default capture constraints — real values, not bare booleans. `ideal` (not
- * `exact`) so a camera that can't do 1080p falls back gracefully instead of
+/** Default capture constraints, given as real values. `ideal` rather than
+ * `exact`, so a camera that can't do 1080p falls back gracefully instead of
  * failing getUserMedia; the QualityController lowers the live resolution. */
 const DEFAULT_MEDIA_CONSTRAINTS = {
   video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
@@ -99,7 +99,7 @@ const DEFAULT_MEDIA_CONSTRAINTS = {
 };
 
 /** Encoder ceiling for the video sender; the QualityController lowers it. This
- * is a CEILING, not a target — GCC/TWCC still throttles the real send rate to
+ * is a ceiling; GCC/TWCC still throttles the real send rate to
  * the measured pipe, so a high ceiling costs nothing on a constrained link and
  * unlocks full 1080p throughput on a fat one. */
 const DEFAULT_MAX_BITRATE = 6_000_000;
@@ -132,7 +132,7 @@ export class WebRTCManager {
     this._bindSignaling();
   }
 
-  /* ── Public API ──────────────────────────────────────────────── */
+  /* Public API */
 
   /**
    * Get local media stream (camera + microphone).
@@ -238,7 +238,7 @@ export class WebRTCManager {
     return this._localStream;
   }
 
-  /* ── Signaling ───────────────────────────────────────────────── */
+  /* Signaling */
 
   _bindSignaling() {
     this._socket.on('room-created', (data) => {
@@ -263,8 +263,8 @@ export class WebRTCManager {
     });
 
     this._socket.on('offer', async (data) => {
-      // The ONLY legitimate mid-call offer is an ICE restart, applied to the
-      // EXISTING connection so its senders, transform and keyed crypto worker
+      // The one legitimate mid-call offer is an ICE restart, applied to the
+      // existing connection so its senders, transform and keyed crypto worker
       // survive. Any other is a downgrade to reject: it would silently rebuild
       // the connection with a fresh keyless worker while the UI said encrypted.
       if (this._pc) {
@@ -325,7 +325,7 @@ export class WebRTCManager {
     });
   }
 
-  /* ── Peer Connection ─────────────────────────────────────────── */
+  /* Peer Connection */
 
   async _createPeerConnection() {
     this._pc = new RTCPeerConnection({
@@ -399,7 +399,7 @@ export class WebRTCManager {
       }
       if (track.kind === 'video') {
         this._videoSender = sender;
-        // A talking-head call is motion, not still detail: this biases the
+        // A talking-head call is mostly motion, so this biases the
         // encoder toward temporal smoothness over per-frame resolution when it
         // has to choose. Harmless if the UA ignores the hint.
         try {
@@ -458,7 +458,7 @@ export class WebRTCManager {
     channel.onclose = () => this._emit('data-channel-close');
   }
 
-  /* ── Reconnection (ICE restart) ──────────────────────────────── */
+  /* Reconnection (ICE restart) */
 
   /**
    * React to an ICE connection state change. `failed` restarts immediately;
@@ -519,7 +519,7 @@ export class WebRTCManager {
     }
   }
 
-  /* ── Insertable Streams (Encoded Transforms) ─────────────────── */
+  /* Insertable Streams (Encoded Transforms) */
 
   _applyEncryptTransform(sender) {
     if (!sender.transform && typeof RTCRtpScriptTransform !== 'undefined') {
@@ -537,7 +537,7 @@ export class WebRTCManager {
     }
   }
 
-  /* ── Cleanup ─────────────────────────────────────────────────── */
+  /* Cleanup */
 
   _cleanup() {
     this._clearReconnectTimer();
@@ -559,7 +559,7 @@ export class WebRTCManager {
     this._isInitiator = false;
   }
 
-  /* ── Event Emitter ───────────────────────────────────────────── */
+  /* Event Emitter */
 
   _emit(event, data) {
     const cbs = this._listeners[event];

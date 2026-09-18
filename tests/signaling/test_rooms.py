@@ -52,7 +52,7 @@ class TestRoomManager:
         mgr.register_peer("sid1")
         room = mgr.create_room("sid1")
         assert room is not None
-        # Capability token: ~128 bits of URL-safe entropy, not a guessable code.
+        # Capability token: ~128 bits of URL-safe entropy.
         assert len(room.room_id) >= 20
         assert re.fullmatch(r"[A-Za-z0-9_-]+", room.room_id)
         assert room.peers == ["sid1"]

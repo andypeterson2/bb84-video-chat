@@ -2,7 +2,7 @@
  * Tests for SignalingClient — the browser-side Socket.IO signaling wrapper.
  */
 
-// Mock Socket.IO — we test signaling logic, not the transport
+// Mock Socket.IO so these tests cover the signaling logic alone
 class MockSocket {
   constructor() {
     this._handlers = {};

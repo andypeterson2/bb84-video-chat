@@ -9,7 +9,7 @@
  * `pipelineModel(snapshot)` is the pure, testable projection of a telemetry
  * snapshot into per-stage state; `createPipeline` is the canvas animation that
  * reads a live model each frame. All numbers shown come from the model (real
- * call data) — the particles are illustrative motion, not fabricated metrics.
+ * call data); the particles illustrate motion and carry no metrics.
  */
 
 /** Ordered stages of the pipeline, left → right. */
@@ -100,7 +100,7 @@ export function pipelineModel(snapshot, now = Date.now()) {
   };
 }
 
-/* ── Canvas animation ────────────────────────────────────────────── */
+/* Canvas animation */
 
 function token(styles, name, fallback) {
   const v = styles.getPropertyValue(name);

@@ -1,12 +1,12 @@
 /**
- * Optical-mode end to end: two reservoir engines, each fed by its OWN daemon
- * (not the mux), mint matching keys over the peers' authenticated channel.
+ * Optical-mode end to end: two reservoir engines, each fed by its own daemon,
+ * mint matching keys over the peers' authenticated channel.
  *
  * This is the Stage-C wiring proof: in optical mode the source browser's
  * frame source transmits to a daemon; the quantum part crosses a (here fake)
  * fiber to the detector's daemon, which surfaces detections to the detector
  * browser; the classical reconciliation still rides the mux. A daemon-backed
- * detector exposes no `deliverDetections`, so the engine must NOT wire the mux
+ * detector exposes no `deliverDetections`, so the engine leaves the mux
  * 'quantum' listener for it.
  */
 import {
