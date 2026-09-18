@@ -78,7 +78,7 @@ class PulseSourceDriver(abc.ABC):
 
     @abc.abstractmethod
     def configure(self, config: object) -> None:
-        """Apply bench configuration (rep rate, intensities, ...)."""
+        """Apply bench configuration (rep rate, timing, ...)."""
 
     @abc.abstractmethod
     async def arm(self, frame: TransmitFrame) -> None:
