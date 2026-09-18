@@ -110,21 +110,6 @@ class NetConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class Intensities:
-    """Decoy-state intensity classes — RESERVED, not implemented.
-
-    Present so a future decoy extension changes emission scheduling, not the
-    physics core (which already keeps multi-photon statistics exact). The
-    plain BB84 emulation uses `signal` only.
-    """
-
-    enabled: bool = False
-    signal: float = 0.5
-    decoy: float = 0.1
-    vacuum: float = 0.0
-
-
-@dataclass(frozen=True, slots=True)
 class BenchConfig:
     """Top-level daemon configuration."""
 
@@ -139,7 +124,6 @@ class BenchConfig:
     timing: TimingConfig = field(default_factory=TimingConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     net: NetConfig = field(default_factory=NetConfig)
-    intensities: Intensities = field(default_factory=Intensities)
 
     def slot_period_ps(self) -> int:
         """Pulse-slot period in picoseconds, from the rep rate."""
@@ -187,7 +171,6 @@ def from_dict(raw: dict) -> BenchConfig:
         timing=_section(raw, "timing", TimingConfig),
         sync=_section(raw, "sync", SyncConfig),
         net=_section(raw, "net", NetConfig),
-        intensities=_section(raw, "intensities", Intensities),
     )
     _validate(cfg)
     return cfg

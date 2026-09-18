@@ -66,11 +66,3 @@ ws_port = 8781
 ws_allowed_origins = ["http://localhost", "https://localhost"]
 fiber_host = "127.0.0.1"
 fiber_port = 8791
-
-# Decoy-state intensity classes — RESERVED, not implemented. Present so a
-# future decoy extension changes emission scheduling, not the physics core.
-[intensities]
-enabled = false
-signal = 0.5
-decoy = 0.1
-vacuum = 0.0
