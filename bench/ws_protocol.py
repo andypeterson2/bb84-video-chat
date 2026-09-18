@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import base64
 
-# ── base64 / packing helpers (byte-compatible with the browser's) ───────
+# base64 / packing helpers (byte-compatible with the browser's)
 
 
 def pack_bits(bits: list[int] | tuple[int, ...]) -> bytes:
@@ -89,7 +89,7 @@ def unb64(text: str) -> bytes:
     return base64.b64decode(text, validate=True)
 
 
-# ── message builders ────────────────────────────────────────────────────
+# message builders
 
 
 def paired(cfg) -> dict:

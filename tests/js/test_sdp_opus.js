@@ -35,7 +35,7 @@ test('merges the quality params into an existing Opus fmtp, preserving its other
   expect(params.maxaveragebitrate).toBe('64000');
   expect(params.useinbandfec).toBe('1');
   expect(params.usedtx).toBe('1');
-  // Stereo is deliberately NOT forced — a talking-head call is mono.
+  // Stereo stays unforced; a talking-head call is mono.
   expect(params.stereo).toBeUndefined();
 });
 

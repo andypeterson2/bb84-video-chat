@@ -3,7 +3,7 @@
  *
  * Runs once per call, right after fingerprint verification, over its own
  * authenticated one-shot channel (MAC domain 'nego'). Optical mode engages
- * only when BOTH peers report a bench backend with complementary physics
+ * only when the two peers report bench backends with complementary physics
  * roles; anything else falls back to the simulated backend with a visible
  * notice — never silently, and never one-sided.
  */

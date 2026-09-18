@@ -77,7 +77,7 @@ describe('buildTelemetrySnapshot', () => {
     expect(snap.keysMinted).toBe(0);
     expect(snap.quality).toBeNull();
     expect(snap.crypto).toBeNull();
-    expect(snap.distillFraction).toBe(0); // no mintBudget ⇒ 0, not NaN
+    expect(snap.distillFraction).toBe(0); // no mintBudget gives 0
     expect(snap.sas).toBeNull();
   });
 });

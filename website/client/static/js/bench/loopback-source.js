@@ -91,7 +91,7 @@ export class LoopbackFrameSource {
     const transmitted = await receiver.receiveQubits();
 
     // Random basis per detection; a wrong basis yields a random bit. Plain
-    // Math.random is deliberate: simulated physics, not a secret.
+    // Math.random suffices here: the physics is simulated.
     const indices = [];
     const detBits = [];
     const detBases = [];

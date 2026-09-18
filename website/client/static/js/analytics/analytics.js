@@ -14,7 +14,7 @@
 import { TELEMETRY_CHANNEL, EVENT_KINDS } from './telemetry.js';
 import { pipelineModel, createPipeline } from './pipeline.js';
 
-/* ── Formatters ──────────────────────────────────────────────────── */
+/* Formatters */
 
 export const fmt = (v, unit = '') => (v === null || v === undefined ? '—' : `${v}${unit}`);
 export const pct = (v) => (typeof v === 'number' ? (v * 100).toFixed(1) + '%' : '—');
@@ -55,7 +55,7 @@ const EVENT_LABEL = {
 };
 export const eventLabel = (kind) => EVENT_LABEL[kind] || kind;
 
-/* ── Time-series buffers (built window-side from live scalars) ───── */
+/* Time-series buffers (built window-side from live scalars) */
 
 /**
  * Bounded ring buffers for the media sparklines. The call window ships current
@@ -95,7 +95,7 @@ export class SeriesBuffers {
   }
 }
 
-/* ── Canvas drawing (theme-token colored, DPR-aware) ─────────────── */
+/* Canvas drawing (theme-token colored, DPR-aware) */
 
 function colorFor(styles, name, fallback) {
   const v = styles.getPropertyValue(name);
@@ -172,7 +172,7 @@ export function drawSparkline(canvas, series, colorToken = '--accent') {
   ctx.stroke();
 }
 
-/* ── Panel rendering ─────────────────────────────────────────────── */
+/* Panel rendering */
 
 const tile = (k, v, cls = '') =>
   `<div class="an-tile ${cls}"><div class="an-k">${k}</div><div class="an-v">${v}</div></div>`;
@@ -386,7 +386,7 @@ export function renderPanels(root, snap, buffers, nowT = Date.now()) {
   }
 }
 
-/* ── Bus + DOM wiring ────────────────────────────────────────────── */
+/* Bus + DOM wiring */
 
 const DENSITY_KEY = 'qvc.analytics.density';
 
@@ -450,7 +450,7 @@ export function createAnalytics({ root, channel, storage }) {
   };
 }
 
-/* ── Auto-mount (real page only; no-op under test import) ─────────── */
+/* Auto-mount (real page only; no-op under test import) */
 
 if (typeof document !== 'undefined') {
   const root = document.getElementById('analytics-root');

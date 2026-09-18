@@ -176,7 +176,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     )
     sid_ips: dict[str, str] = {}
 
-    # ── REST endpoints ──────────────────────────────────────────────
+    # REST endpoints
 
     # Fail-closed: without QVC_ADMIN_SECRET the admin surface 404s like a missing
     # route; with it, every /admin request must send the secret in X-Admin-Secret.
@@ -235,7 +235,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
         """Return connected peers for the dashboard."""
         return jsonify({"peers": rooms.get_peers_summary()})
 
-    # ── Contract routes: health + discovery ─────────────────────────
+    # Contract routes: health + discovery
 
     @flask_app.get("/health")
     def health():
@@ -276,7 +276,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
             "streaming": _STREAMING,
         })
 
-    # ── Socket.IO events ────────────────────────────────────────────
+    # Socket.IO events
 
     @sio.event
     def connect(sid, environ):

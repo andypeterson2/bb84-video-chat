@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import hashlib
 
-# Fixed, public — identical on both benches. Not a secret; synchronization
-# security comes from the authenticated classical channel, not this string.
+# Fixed and public, identical on both benches. Synchronization
+# security comes from the authenticated classical channel.
 _SYNC_SEED = b"qvc-qubit4sync-v1"
 
 

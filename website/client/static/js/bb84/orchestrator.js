@@ -256,7 +256,7 @@ export class BB84Orchestrator {
   }
 }
 
-/* ── fingerprint-commitment helpers ─────────────────────────────── */
+/* fingerprint-commitment helpers */
 
 const te = new TextEncoder();
 

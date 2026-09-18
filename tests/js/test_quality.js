@@ -98,7 +98,7 @@ test('hysteresis: a single low sample does not switch tiers', async () => {
   await poll(controller, 1);
   await poll(controller, 1); // back-to-back but only 2 confirming samples so far
 
-  // Still at the starting top tier — not enough confirmations to drop.
+  // Still at the starting top tier: too few confirmations to drop.
   expect(updates.at(-1).tier).toBe('Full HD');
   expect(sender.appliedBitrates).toHaveLength(0);
 });

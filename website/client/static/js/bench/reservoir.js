@@ -63,7 +63,7 @@ export const rotationFloorMs = () => tunable('QVC_ROTATION_FLOOR_MS', ROTATION_F
 export const sessionRestartDelayMs = () =>
   tunable('QVC_SESSION_RESTART_DELAY_MS', SESSION_RESTART_DELAY_MS);
 
-/** A streaming-session failure that should count and restart, not crash. */
+/** A streaming-session failure that counts and restarts the session. */
 class SessionError extends Error {
   constructor(message, reason) {
     super(message);
@@ -308,7 +308,7 @@ export class ReservoirEngine {
     this._source.stop?.().catch?.(() => {});
   }
 
-  /* ── Sessions ─────────────────────────────────────────────────── */
+  /* Sessions */
 
   async _listenForSessionRestarts() {
     while (!this._destroyed) {
@@ -418,7 +418,7 @@ export class ReservoirEngine {
     }
   }
 
-  /* ── Source side ──────────────────────────────────────────────── */
+  /* Source side */
 
   async _runSourceSession(session) {
     const frames = session.router.stream('frame');
@@ -482,7 +482,7 @@ export class ReservoirEngine {
     }
   }
 
-  /* ── Detector side ────────────────────────────────────────────── */
+  /* Detector side */
 
   async _runDetectorSession(session) {
     const frames = session.router.stream('frame');
@@ -583,7 +583,7 @@ export class ReservoirEngine {
     });
   }
 
-  /* ── Shared frame tail: verdicts, pooling, telemetry ──────────── */
+  /* Shared frame tail: verdicts, pooling, telemetry */
 
   async _exchangeVerdict(frames, channel, signal, frame) {
     const { frameId, qber, remaining, stats } = frame;
@@ -621,7 +621,7 @@ export class ReservoirEngine {
     });
   }
 
-  /* ── Minting & rotation ───────────────────────────────────────── */
+  /* Minting & rotation */
 
   /** Error-rate estimate for the pooled bits: each accepted frame's QBER, weighted by its bits. */
   _poolQber() {
@@ -693,7 +693,7 @@ export class ReservoirEngine {
   }
 }
 
-/* ── Small helpers ──────────────────────────────────────────────── */
+/* Small helpers */
 
 /** Encode a detection set for the mux 'quantum' channel (loopback path). */
 export function encodePeerDetections(d) {

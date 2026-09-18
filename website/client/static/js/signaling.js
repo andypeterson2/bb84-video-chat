@@ -2,7 +2,7 @@
  * SignalingClient — thin wrapper around Socket.IO for WebRTC signaling.
  *
  * Emits and listens for signaling events: room management, SDP exchange,
- * ICE candidates, and peer lifecycle. Does NOT handle media or encryption.
+ * ICE candidates, and peer lifecycle. Media and encryption live elsewhere.
  *
  * Events emitted to server:
  *   create_room, join_room, leave_room, offer, answer, ice_candidate
@@ -37,7 +37,7 @@ export class SignalingClient {
     this._bindSocketEvents();
   }
 
-  /* ── Outgoing (browser → signaling server) ────────────────────── */
+  /* Outgoing (browser → signaling server) */
 
   /** Create a new room (caller becomes first peer). */
   createRoom() {
@@ -81,7 +81,7 @@ export class SignalingClient {
     this._socket.emit('ice_candidate', { candidate });
   }
 
-  /* ── Event subscription ───────────────────────────────────────── */
+  /* Event subscription */
 
   /**
    * Subscribe to a signaling event.
@@ -105,7 +105,7 @@ export class SignalingClient {
     if (subs) subs.delete(callback);
   }
 
-  /* ── Internal ─────────────────────────────────────────────────── */
+  /* Internal */
 
   /** @private */
   _bindSocketEvents() {

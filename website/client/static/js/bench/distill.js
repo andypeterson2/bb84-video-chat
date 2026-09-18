@@ -43,7 +43,7 @@ const MIN_QBER = 0.005;
 const PARITIES_PER_ERROR = 2.5;
 const PERM_SEED_BYTES = 16;
 
-/** A distillation failure that should fail the mint, not crash the engine. */
+/** A distillation failure that fails the mint and leaves the engine running. */
 export class DistillError extends Error {
   constructor(message, reason) {
     super(message);

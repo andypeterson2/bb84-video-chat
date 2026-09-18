@@ -8,7 +8,7 @@
  *   DataChannel: BB84 key exchange messages
  */
 
-/* ── State ──────────────────────────────────────────────────────── */
+/* State */
 const state = {
   signalingConnected: false,
   callReady: false, // the WebRTC manager and key engine exist, so a session can start
@@ -111,7 +111,7 @@ let buildSnapshot = null;
 /** EVENT_KINDS; empty until the telemetry module loads. */
 let EVENT = {};
 
-/* ── Icons ──────────────────────────────────────────────────────── */
+/* Icons */
 const ICONS = {
   cameraOn:
     '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="5" width="14" height="14"/><path d="M16 10l6-3v10l-6-3"/></svg>',
@@ -127,7 +127,7 @@ const ICONS = {
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 2 4-6"/></svg>',
 };
 
-/* ── Signaling ──────────────────────────────────────────────────── */
+/* Signaling */
 
 /**
  * Fetch ICE servers (STUN + short-lived TURN credentials) from the signaling
@@ -300,7 +300,7 @@ function connectToSignaling(url) {
   );
 }
 
-/* ── BB84 ───────────────────────────────────────────────────────── */
+/* BB84 */
 
 /**
  * Reservoir engine telemetry → UI. Keys are minted continuously and rotated
@@ -385,7 +385,7 @@ function handleReservoirFailure(s) {
   }
 }
 
-/* ── Optical bench (hardware daemon) ────────────────────────────── */
+/* Optical bench (hardware daemon) */
 
 /** Load the persisted optical-mode settings (per-origin). */
 function loadOpticalSettings() {
@@ -486,7 +486,7 @@ function qberStatus() {
 
 /**
  * Channel-quality label for the QBER badge — a link readout ("how noisy is the
- * quantum channel"), NOT a safety verdict. The cipher pill is the single source
+ * quantum channel"). The cipher pill is the single source
  * of truth for whether the call is encrypted; a QBER spike raises errors and
  * rejects frames but the last good key keeps the media safe.
  */
@@ -609,7 +609,7 @@ function drawQberChart() {
   });
 }
 
-/* ── Video ──────────────────────────────────────────────────────── */
+/* Video */
 function showLocalVideo(s) {
   const v = document.getElementById('local-video');
   if (v) {
@@ -633,7 +633,7 @@ function clearRemoteVideo() {
   if (v) v.srcObject = null;
 }
 
-/* ── Actions ────────────────────────────────────────────────────── */
+/* Actions */
 function toggleCamera() {
   state.cameraOn = !state.cameraOn;
   if (localStream)
@@ -674,7 +674,7 @@ async function startLocalMedia() {
 async function handleCreateRoom() {
   if (!webrtcManager) return;
   state.isInitiator = true; // the creator runs BB84 as Alice
-  // Pair the bench BEFORE the peer connects, clear of the DataChannel bootstrap.
+  // Pair the bench before the peer connects, clear of the DataChannel bootstrap.
   await connectOpticalBenchIfEnabled();
   if (!(await startLocalMedia())) return;
   webrtcManager.createRoom();
@@ -689,7 +689,7 @@ function lobbyReady() {
   return state.signalingConnected && state.callReady;
 }
 
-/** Whether a key was ever installed this session (derived, not tracked). */
+/** Whether a key was ever installed this session, derived from worker state. */
 function hasBeenEncrypted() {
   return state.keyIndex !== null;
 }
@@ -730,7 +730,7 @@ async function handleJoinRoom(e) {
   }
   if (!webrtcManager) return;
   state.isInitiator = false; // the joiner runs BB84 as Bob
-  // Pair the bench BEFORE connecting, clear of the DataChannel bootstrap.
+  // Pair the bench before connecting, clear of the DataChannel bootstrap.
   await connectOpticalBenchIfEnabled();
   if (!(await startLocalMedia())) return;
   state.joining = true; // show "Connecting…" until the peer stream arrives
@@ -792,7 +792,7 @@ function stopQualityController() {
   state.quality = null;
 }
 
-/* ── Analytics telemetry bus (second-window demo screen) ─────────── */
+/* Analytics telemetry bus (second-window demo screen) */
 
 /** Wire the BroadcastChannel: publish snapshots out, accept demo commands in. */
 function setupTelemetryBus(channelName, isValidCommand) {
@@ -932,7 +932,7 @@ function handleLeave() {
   render();
 }
 
-/* ── Timer ──────────────────────────────────────────────────────── */
+/* Timer */
 function startTimer() {
   stopTimer();
   state.elapsed = 0;
@@ -952,7 +952,7 @@ function fmtTime(s) {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/* ── Toast ──────────────────────────────────────────────────────── */
+/* Toast */
 let toastTimer = null;
 /** Show a transient message. tone: 'info' (default) | 'success' | 'error'. */
 function showToast(msg, tone = 'info') {
@@ -966,7 +966,7 @@ function showToast(msg, tone = 'info') {
   toastTimer = setTimeout(() => el.classList.remove('toast--visible'), 5000);
 }
 
-/* ── Theme ──────────────────────────────────────────────────────── */
+/* Theme */
 function getTheme() {
   return localStorage.getItem('qvc-theme') || 'light';
 }
@@ -975,7 +975,7 @@ function setTheme(t) {
   document.documentElement.dataset.theme = t;
 }
 
-/** Always-visible cipher pill — worker truth, not UI assumption. */
+/** Always-visible cipher pill, reporting the worker's own state. */
 function cipherPill() {
   const views = {
     establishing: { mod: 'establishing', label: 'Establishing encryption…' },
@@ -994,7 +994,7 @@ function cipherPill() {
   return `<span class="cipher-pill cipher-pill--${v.mod}">${v.label}</span>`;
 }
 
-/* ── Render ─────────────────────────────────────────────────────── */
+/* Render */
 function render() {
   const app = document.getElementById('app');
   if (!app) return;
@@ -1183,7 +1183,7 @@ function render() {
   }
 }
 
-/* ── Init ───────────────────────────────────────────────────────── */
+/* Init */
 document.addEventListener('DOMContentLoaded', () => {
   setTheme(getTheme());
   loadOpticalSettings();
