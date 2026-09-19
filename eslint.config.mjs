@@ -4,9 +4,9 @@ import js from '@eslint/js';
 import globals from 'globals';
 import sonarjs from 'eslint-plugin-sonarjs';
 
-// Complexity budgets. Cognitive complexity is the primary metric — it punishes
-// nesting, not flat readable constructs — so the core `complexity` rule stays
-// off (no double-charging).
+// Complexity budgets. Cognitive complexity is the primary metric, since it
+// punishes nesting rather than plain length, so the core `complexity` rule
+// stays off (no double-charging).
 const complexityBudgets = {
   'sonarjs/cognitive-complexity': ['error', 15],
   'max-depth': ['error', 4],
