@@ -140,6 +140,25 @@ def origin_allowed(origin: str | None, allowed: tuple[str, ...]) -> bool:
     return any(origin == a or origin.startswith(a + ":") for a in allowed)
 
 
+async def _pump_browser(ws, conn: BenchConnection, current: dict, *, closed: type[Exception]) -> None:
+    """Feed one browser connection's messages to `conn` while it owns the slot.
+
+    The slot is what routes fiber frames to a browser, so it is cleared only by
+    the connection that still holds it: a connection closing after its successor
+    registered would otherwise unsubscribe the live browser. A reply that lands
+    on an already-closed socket ends the connection quietly.
+    """
+    current["conn"] = conn
+    try:
+        async for raw in ws:
+            await conn.on_message(raw)
+    except closed:
+        pass
+    finally:
+        if current["conn"] is conn:
+            current["conn"] = None
+
+
 async def serve(cfg: BenchConfig, *, pairing: Pairing | None = None) -> None:  # pragma: no cover - real entry point
     """Run the daemon: fiber link + browser WebSocket. Requires `websockets`.
 
@@ -185,12 +204,7 @@ async def serve(cfg: BenchConfig, *, pairing: Pairing | None = None) -> None:  #
         # Paired state lives on this per-connection object, never on the shared
         # Pairing (token only), so connections can't leak or reset each other's.
         conn = BenchConnection(cfg, pairing, lambda m: ws.send(json.dumps(m)), source=source, detector=detector)
-        current["conn"] = conn
-        try:
-            async for raw in ws:
-                await conn.on_message(raw)
-        finally:
-            current["conn"] = None
+        await _pump_browser(ws, conn, current, closed=websockets.exceptions.ConnectionClosed)
 
     async with websockets.serve(ws_handler, cfg.net.ws_host, cfg.net.ws_port):
         logger.warning("Bench daemon (%s) listening on ws://%s:%d", cfg.role, cfg.net.ws_host, cfg.net.ws_port)

@@ -9,7 +9,7 @@ import asyncio
 import json
 
 from bench.config import BenchConfig, DetectorConfig, SyncConfig, TimingConfig
-from bench.daemon import BenchConnection, origin_allowed
+from bench.daemon import BenchConnection, _pump_browser, origin_allowed
 from bench.pairing import Pairing
 from bench.session import DetectorBench, SourceBench
 from bench.ws_protocol import b64, pack_bits
@@ -187,3 +187,64 @@ def test_eve_control_is_source_only():
         assert det_sink.last("error")["code"] == "wrong_role"
 
     asyncio.run(run())
+
+
+class _FakeSocket:
+    """Yields queued messages, then ends the connection like a closed socket."""
+
+    def __init__(self, messages=()):
+        self._messages = list(messages)
+
+    def __aiter__(self):
+        async def gen():
+            for m in self._messages:
+                yield m
+
+        return gen()
+
+
+def test_a_closing_connection_leaves_its_successors_slot_alone():
+    """A browser that closes after the next one paired must not unsubscribe it."""
+    current = {"conn": None}
+    first = BenchConnection(_cfg("detector"), Pairing(), Sink())
+    second = BenchConnection(_cfg("detector"), Pairing(), Sink())
+    release = asyncio.Event()
+
+    class _HeldSocket:
+        def __aiter__(self):
+            async def gen():
+                await release.wait()
+                return
+                yield  # pragma: no cover - unreachable, makes this an async generator
+
+            return gen()
+
+    async def scenario():
+        held = asyncio.create_task(_pump_browser(_HeldSocket(), first, current, closed=RuntimeError))
+        await asyncio.sleep(0)
+        assert current["conn"] is first
+        # The next browser connects while the first is still draining.
+        await _pump_browser(_FakeSocket(), second, current, closed=RuntimeError)
+        current["conn"] = second
+        release.set()
+        await held
+        return current["conn"]
+
+    assert asyncio.run(scenario()) is second
+
+
+def test_a_reply_to_a_closed_socket_ends_the_connection_quietly():
+    closed = RuntimeError("socket closed")
+
+    class Boom:
+        def __aiter__(self):
+            async def gen():
+                raise closed
+                yield  # pragma: no cover - unreachable, makes this an async generator
+
+            return gen()
+
+    current = {"conn": None}
+    conn = BenchConnection(_cfg("detector"), Pairing(), Sink())
+    asyncio.run(_pump_browser(Boom(), conn, current, closed=RuntimeError))
+    assert current["conn"] is None
