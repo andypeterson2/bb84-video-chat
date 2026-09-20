@@ -89,6 +89,10 @@ function fakeDaemonPair({ eavesdropper = { on: false } } = {}) {
       detectorCb = cb;
     },
     onStatus: () => {},
+    reportedQber: [],
+    reportQber(value) {
+      this.reportedQber.push(value);
+    },
   };
 
   return { sourceConn, detectorConn };

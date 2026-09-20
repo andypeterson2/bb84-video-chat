@@ -177,6 +177,55 @@ def test_full_path_source_to_detector_to_browser():
     asyncio.run(run())
 
 
+def test_qber_control_is_detector_only():
+    async def run():
+        src_sink = Sink()
+        src_pairing = Pairing()
+        src_conn = BenchConnection(
+            _cfg("source"), src_pairing, src_sink, source=SourceBench(_cfg("source"), _noop),
+        )
+        await src_conn.on_message(json.dumps({"t": "pair", "token": src_pairing.token}))
+        await src_conn.on_message(json.dumps({"t": "qber", "value": 0.02}))
+        assert src_sink.last("error")["code"] == "wrong_role"
+
+    asyncio.run(run())
+
+
+def test_qber_steers_the_detectors_polarization_search():
+    async def run():
+        det_cfg = _cfg("detector")
+        bench = DetectorBench(det_cfg)
+        sink = Sink()
+        pairing = Pairing()
+        conn = BenchConnection(det_cfg, pairing, sink, detector=bench)
+        await conn.on_message(json.dumps({"t": "pair", "token": pairing.token}))
+
+        before = bench.tagger.compensator.compensation_rad()
+        # A block's worth of frames, then another at a different error level, so
+        # the search has two blocks to compare and commits between them.
+        for value in [0.02] * 8 + [0.09] * 8:
+            await conn.on_message(json.dumps({"t": "qber", "value": value}))
+        assert sink.last("error") is None
+        assert bench.tagger.compensator.compensation_rad() != before
+
+    asyncio.run(run())
+
+
+def test_a_malformed_qber_is_refused():
+    async def run():
+        det_cfg = _cfg("detector")
+        sink = Sink()
+        pairing = Pairing()
+        conn = BenchConnection(det_cfg, pairing, sink, detector=DetectorBench(det_cfg))
+        await conn.on_message(json.dumps({"t": "pair", "token": pairing.token}))
+        for bad in ({"t": "qber"}, {"t": "qber", "value": "x"}, {"t": "qber", "value": 7}):
+            sink.msgs.clear()
+            await conn.on_message(json.dumps(bad))
+            assert sink.last("error")["code"] == "bad_qber"
+
+    asyncio.run(run())
+
+
 def test_eve_control_is_source_only():
     async def run():
         det_sink = Sink()
