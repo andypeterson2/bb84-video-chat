@@ -2,10 +2,15 @@
 
 On a deployed fiber, polarization rotates slowly and is the dominant QBER
 dynamic (per the DTU field trial); motorized controllers chase it with a
-coordinate-descent search, discarding the high-QBER chunks during overshoot.
-This models both the drift and a compensator that periodically re-zeroes it
-with a configurable overshoot transient, so the QBER strip chart shows the
-same drift-and-recover a real bench does.
+coordinate-descent search. This models both the drift and that search, so an
+uncompensated link visibly degrades and a compensated one holds.
+
+The search only ever sees QBER estimated from a few dozen disclosed bits, on
+top of an error floor it cannot remove. A step proportional to that estimate
+never settles — it keeps moving at the floor and amplifies the sampling noise.
+So the search dithers instead: it probes one side for a block of frames, the
+other side for the next, and commits toward whichever block measured lower.
+Averaging over a block is what makes the comparison survive the noise.
 """
 
 from __future__ import annotations
@@ -41,31 +46,40 @@ class EmulatedPolarization:
 
 
 class CoordinateDescentCompensator(PolarizationCompensatorDriver):
-    """Re-zeroing compensator with a modeled overshoot transient.
+    """Dithered coordinate descent on the single polarization axis.
 
-    Given the residual polarization error it observes (via QBER), it nudges
-    its compensation toward cancelling it — occasionally overshooting, which
-    briefly RAISES QBER before settling, exactly the transient a real search
-    produces.
+    Holds a committed compensation angle and probes one dither step either side
+    of it, alternating each block. When a block's mean QBER beats the previous
+    block's, the committed angle moves that way. The probe never stops, so the
+    applied angle always carries the dither — that residual ripple is the
+    drift-and-recover the QBER chart shows.
     """
 
-    def __init__(self, *, gain: float = 0.6, overshoot: float = 1.4) -> None:
-        """Configure the compensator's search gain and overshoot."""
+    def __init__(self, *, dither_rad: float = 0.08, block_frames: int = 8, gain: float = 0.5) -> None:
+        """Configure the probe amplitude, averaging block, and commit step."""
         self._comp = 0.0
+        self._dither = dither_rad
+        self._block = max(1, block_frames)
         self._gain = gain
-        self._overshoot = overshoot
-        self._last_qber = 0.0
+        self._direction = 1.0
+        self._samples: list[float] = []
+        self._previous_mean: float | None = None
 
     def compensation_rad(self) -> float:
-        """Current compensation angle (rad)."""
-        return self._comp
+        """Angle currently applied, committed value plus the active probe."""
+        return self._comp + self._direction * self._dither
 
     def step(self, observed_qber: float) -> None:
-        """Advance the search one step from the latest observed QBER."""
-        # Move against the observed error; overshoot when QBER jumped up.
-        rising = observed_qber > self._last_qber
-        factor = self._overshoot if rising else self._gain
-        # QBER ~ sin^2(residual); approximate residual magnitude from it.
-        residual = observed_qber**0.5
-        self._comp -= factor * residual * (1.0 if self._comp >= 0 else -1.0)
-        self._last_qber = observed_qber
+        """Feed one frame's QBER; commit and flip at each block boundary."""
+        self._samples.append(observed_qber)
+        if len(self._samples) < self._block:
+            return
+        mean = sum(self._samples) / len(self._samples)
+        self._samples = []
+        if self._previous_mean is not None:
+            # The previous block probed the other side, so a lower mean here
+            # means this side is better; a higher one means the other side was.
+            toward = 1.0 if mean < self._previous_mean else -1.0
+            self._comp += toward * self._direction * self._dither * self._gain
+        self._previous_mean = mean
+        self._direction = -self._direction
