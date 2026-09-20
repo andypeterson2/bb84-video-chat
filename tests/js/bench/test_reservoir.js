@@ -117,6 +117,33 @@ describe('reservoir streaming', () => {
     }
   });
 
+  test('a frame too small to sample is rejected, not pooled as error-free', async () => {
+    // 64 slots yields only a couple of sifted bits, so the sample comes out
+    // empty and the frame is unmeasurable. Three in a row latch the engine.
+    const p = enginePair({ slotsPerFrame: 64 });
+    try {
+      p.start();
+      await vi.waitFor(
+        () => {
+          expect(p.phases('source', 'exhausted').length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 8000, interval: 25 },
+      );
+
+      const failures = p.phases('source', 'failed');
+      expect(failures.length).toBeGreaterThanOrEqual(3);
+      expect(failures.every((f) => f.reason === 'sample-too-small')).toBe(true);
+
+      // Nothing was accepted, nothing pooled, and no key was minted from bits
+      // whose error rate nobody ever measured.
+      expect(p.phases('source', 'frame').every((f) => f.accepted === false)).toBe(true);
+      expect(p.phases('source', 'minted')).toHaveLength(0);
+      expect(p.installed.source).toHaveLength(0);
+    } finally {
+      p.destroy();
+    }
+  });
+
   test('the rotation floor defers installs while minting continues', async () => {
     globalThis.QVC_ROTATION_FLOOR_MS = 60_000; // effectively: only one install
     const p = enginePair();
