@@ -14,10 +14,6 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
 
 # Four SPADs indexed by basis*2 + bit: 0 = Z/H, 1 = Z/V, 2 = X/D, 3 = X/A
 # (Z is basis 0, X is basis 1).
@@ -77,10 +73,6 @@ class PulseSourceDriver(abc.ABC):
     """
 
     @abc.abstractmethod
-    def configure(self, config: object) -> None:
-        """Apply bench configuration (rep rate, timing, ...)."""
-
-    @abc.abstractmethod
     async def arm(self, frame: TransmitFrame) -> None:
         """Load a frame's prepared states, ready to fire."""
 
@@ -97,14 +89,6 @@ class TimeTaggerDriver(abc.ABC):
     and the clock transform, yield the resulting clicks.
     """
 
-    #: Whether the source laser's clock arrives on a hardware sync input. If
-    #: False, sync is recovered from the qubit stream itself (Qubit4Sync).
-    has_sync_input: bool = False
-
-    @abc.abstractmethod
-    def configure(self, config: object) -> None:
-        """Apply detector configuration (efficiency, dark rate, gate, ...)."""
-
     @abc.abstractmethod
     async def start(self) -> None:
         """Begin acquisition."""
@@ -112,10 +96,6 @@ class TimeTaggerDriver(abc.ABC):
     @abc.abstractmethod
     async def stop(self) -> None:
         """End acquisition."""
-
-    @abc.abstractmethod
-    def clicks(self) -> AsyncIterator[Click]:
-        """Async-iterate detection events as they arrive."""
 
 
 class PolarizationCompensatorDriver(abc.ABC):

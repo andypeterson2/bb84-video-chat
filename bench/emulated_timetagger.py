@@ -38,15 +38,6 @@ class EmulatedTimeTagger(TimeTaggerDriver):
         self._compensator = CoordinateDescentCompensator()
         self._running = False
 
-    #: shared-clock benches declare a hardware sync input.
-    @property
-    def has_sync_input(self) -> bool:  # type: ignore[override]
-        """Whether this bench has a hardware sync input (shared-clock mode)."""
-        return self._cfg.sync.mode == "shared-clock"
-
-    def configure(self, config: object) -> None:
-        """No-op: the emulated detector takes its parameters at construction."""
-
     async def start(self) -> None:
         """Begin acquisition."""
         self._running = True
@@ -54,17 +45,6 @@ class EmulatedTimeTagger(TimeTaggerDriver):
     async def stop(self) -> None:
         """End acquisition."""
         self._running = False
-
-    async def clicks(self):  # pragma: no cover - real-hardware streaming path
-        """Streaming click interface (real-hardware contract).
-
-        The emulator drives detection per fiber frame via `detect()`; a real
-        timetagger would yield a continuous stream here and the daemon would
-        segment frames using the sync string. Present so the class satisfies
-        the driver contract; not exercised by the emulated daemon.
-        """
-        return
-        yield  # unreachable; marks this an async generator
 
     @property
     def clock(self) -> ClockModel:

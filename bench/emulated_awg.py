@@ -34,9 +34,6 @@ class EmulatedAWG(PulseSourceDriver):
         self._prep = rng.stream(cfg.seed, rng.STAGE_PREP)
         self._armed: TransmitFrame | None = None
 
-    def configure(self, config: object) -> None:
-        """No-op: the emulated source takes its parameters at construction."""
-
     def set_eavesdropper(self, strategy: EveStrategy) -> None:
         """Install (or clear) the fiber-tap attack."""
         self._eve = strategy
