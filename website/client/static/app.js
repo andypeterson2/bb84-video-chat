@@ -1184,7 +1184,12 @@ function render() {
 }
 
 /* Init */
-document.addEventListener('DOMContentLoaded', () => {
+
+/**
+ * Bring the page up: theme, saved settings, invite token, signaling, listeners.
+ * Exported so the tests drive the same entry point the page does.
+ */
+export function init() {
   setTheme(getTheme());
   loadOpticalSettings();
   pendingRoomToken = parseRoomToken(window.location.hash);
@@ -1192,7 +1197,21 @@ document.addEventListener('DOMContentLoaded', () => {
   connectToSignaling(window.QVC_SIGNALING_URL || window.location.origin);
   bindDelegates(document.getElementById('app'));
   render();
-});
+}
+
+// A module script is deferred, so the document may already be parsed by now.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+
+/* Test surface: the internals the render tests drive. */
+export { state, render, parseRoomToken, resetSession, bindDelegates };
+export const setPendingRoomToken = (v) => {
+  pendingRoomToken = v;
+};
+export const getPendingRoomToken = () => pendingRoomToken;
 
 /* Event delegation
  *

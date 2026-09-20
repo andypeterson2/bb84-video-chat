@@ -34,11 +34,12 @@ export default [
     rules: sharedRules,
   },
   {
-    // The page bootstrap — a classic <script>, loaded before the module graph.
+    // The page bootstrap. A module, so the tests import its surface instead of
+    // re-parsing the file; socket.io still arrives as a global from its own tag.
     files: ['website/client/static/app.js'],
     languageOptions: {
       ecmaVersion: 'latest',
-      sourceType: 'script',
+      sourceType: 'module',
       globals: {
         ...globals.browser,
         io: 'readonly', // socket.io client from its own <script> tag

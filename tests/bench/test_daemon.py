@@ -260,24 +260,40 @@ def test_a_closing_connection_leaves_its_successors_slot_alone():
     release = asyncio.Event()
 
     class _HeldSocket:
+        """Stays open until its event fires, like a browser that is still connected."""
+
+        def __init__(self, gate):
+            self._gate = gate
+
         def __aiter__(self):
             async def gen():
-                await release.wait()
+                await self._gate.wait()
                 return
                 yield  # pragma: no cover - unreachable, makes this an async generator
 
             return gen()
 
     async def scenario():
-        held = asyncio.create_task(_pump_browser(_HeldSocket(), first, current, closed=RuntimeError))
+        held = asyncio.create_task(_pump_browser(_HeldSocket(release), first, current, closed=RuntimeError))
         await asyncio.sleep(0)
         assert current["conn"] is first
-        # The next browser connects while the first is still draining.
-        await _pump_browser(_FakeSocket(), second, current, closed=RuntimeError)
-        current["conn"] = second
+        # The next browser connects and takes the slot while the first is still
+        # draining, so both are live at once — as the daemon wires them.
+        second_release = asyncio.Event()
+        successor = asyncio.create_task(
+            _pump_browser(_HeldSocket(second_release), second, current, closed=RuntimeError),
+        )
+        await asyncio.sleep(0)
+        assert current["conn"] is second
+
+        # Now the FIRST closes. It must leave its successor's slot alone.
         release.set()
         await held
-        return current["conn"]
+        slot_after_first_closed = current["conn"]
+
+        second_release.set()
+        await successor
+        return slot_after_first_closed
 
     assert asyncio.run(scenario()) is second
 
