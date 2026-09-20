@@ -50,11 +50,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r signaling/requirements.txt
           pip install -r bench/requirements.txt
-          pip install pytest pytest-timeout
+          pip install -r requirements-dev.txt
 
-      - name: Run signaling + bench tests
+      - name: Run signaling + bench + contract tests
         run: |
-          python -m pytest tests/signaling/ tests/bench/ \
+          python -m pytest tests/signaling/ tests/bench/ tests/contract/ \
             -v --tb=short --timeout=60
 
   js-tests:
