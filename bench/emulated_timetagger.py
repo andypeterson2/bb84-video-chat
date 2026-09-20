@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from bench import physics
 from bench.clock import ClockModel, sample_clock
 from bench.drivers import Click, TimeTaggerDriver
-from bench.pol_compensator import EmulatedPolarization
+from bench.pol_compensator import CoordinateDescentCompensator, EmulatedPolarization
 
 if TYPE_CHECKING:
     from bench.config import BenchConfig
@@ -35,6 +35,7 @@ class EmulatedTimeTagger(TimeTaggerDriver):
             ClockModel(0, 0.0, 0.0) if cfg.sync.mode == "shared-clock" else sample_clock(cfg)
         )
         self._pol = EmulatedPolarization(cfg)
+        self._compensator = CoordinateDescentCompensator()
         self._running = False
 
     #: shared-clock benches declare a hardware sync input.
@@ -70,10 +71,22 @@ class EmulatedTimeTagger(TimeTaggerDriver):
         """The (test-visible) ground-truth clock the recovery must invert."""
         return self._clock
 
+    @property
+    def compensator(self) -> CoordinateDescentCompensator:
+        """The polarization search tracking this bench's fiber."""
+        return self._compensator
+
+    def report_qber(self, observed_qber: float) -> None:
+        """Feed the search one frame's measured QBER, from the browser."""
+        self._compensator.step(observed_qber)
+
     def detect(self, frame: FiberFrame) -> list[Click]:
         """Detect one fiber frame's pulses; advance the fiber polarization."""
         if not self._running:
             msg = "detect() before start()"
             raise RuntimeError(msg)
         self._pol.step()
-        return physics.detect(frame.pulses, self._cfg, self._clock, self._pol.angle_rad)
+        # What the detector sees is the fiber's rotation less what the
+        # compensator currently applies.
+        residual = self._pol.angle_rad - self._compensator.compensation_rad()
+        return physics.detect(frame.pulses, self._cfg, self._clock, residual)

@@ -95,6 +95,10 @@ class DetectorBench:
         """Test access to the ground-truth clock the recovery inverts."""
         return self._tagger
 
+    def report_qber(self, observed_qber: float) -> None:
+        """Pass a frame's measured QBER to the polarization search."""
+        self._tagger.report_qber(observed_qber)
+
     def process(self, raw: bytes) -> RecoveredFrame:
         """Decode a fiber frame, detect, align, and recover the payload."""
         frame: FiberFrame = decode(raw)

@@ -7,6 +7,7 @@ Message set (⇒ browser→daemon, ⇐ daemon→browser):
   ⇒ stop {}                         ⇐ stopped
   ⇒ transmit {frame_id, bits, bases, slots}   (source)  ⇐ frame-sent {frame_id, tx_epoch_ps}
   ⇒ eve {enabled}                   (source)
+  ⇒ qber {value}                    (detector)
   ⇐ detections {frame_id, indices, bits, bases, stats}  (detector)
   ⇐ status {stored, ...}            ⇐ error {code, detail}
 

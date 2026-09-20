@@ -22,7 +22,8 @@ length_km = 1.0
 attenuation_db_per_km = 0.2
 insertion_db = 1.0
 # Slow polarization rotation on the fiber (rad/s) — the dominant QBER dynamic
-# on a real deployed link. The detector's compensator chases it.
+# on a real deployed link. The detector's compensator chases it, steering from
+# the QBER the browser measures each frame.
 pol_drift_rad_per_s = 0.02
 
 # ── Detector presets ────────────────────────────────────────────────────

@@ -123,9 +123,12 @@ class PolarizationCompensatorDriver(abc.ABC):
 
     Real implementation: motorized polarization controllers running a
     coordinate-descent search that minimizes QBER (as in the DTU field
-    trial). Emulated implementation: periodically re-zero the modeled drift,
-    with a configurable overshoot transient so the QBER strip chart shows the
-    drift-and-recover the real bench exhibits.
+    trial). Emulated implementation: the same search over the modeled drift,
+    dithering either side of its committed angle so the QBER chart carries the
+    ripple a live search produces.
+
+    `step` is fed one frame's measured QBER, which reaches the detector bench
+    from the browser that reconciles the frame.
     """
 
     @abc.abstractmethod
