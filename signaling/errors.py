@@ -1,7 +1,8 @@
 """Uniform JSON error envelope for the qvc signaling API.
 
 Implements the cross-repo backend contract (see the website repo at
-``docs/api-contract/CONTRACT.md``): every 4xx/5xx response body is::
+``docs/api-contract/schemas/error.schema.json``): every 4xx/5xx response body
+is::
 
     {"error": {"code": "<slug>", "message": "<human>", "details": <optional>}}
 
