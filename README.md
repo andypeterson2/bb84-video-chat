@@ -40,7 +40,7 @@ pip install flask flask-cors python-socketio eventlet
 python signaling/main.py
 ```
 
-The server picks a port unless `QVC_SERVER_REST_PORT` is set. With Docker, `docker compose up -d` from the website root reads port assignments from `.env`; `DEV=1` also serves the Astro frontend.
+The server picks a port unless `QVC_SERVER_REST_PORT` is set. `docker-compose.yml` here builds that one service and nothing else; it reads `QVC_SERVER_PORT` from a `.env` beside it, which has no default, so set it before `docker compose up -d`. The Astro frontend and its `DEV=1` profile live in the website repository's own compose file, not this one.
 
 Then open the page serving `website/client/index.html` — under Docker, the Astro dev server at `localhost:4322/projects/quantum-video-chat/client/`. Open two tabs, start a session in one, and paste the invite link into the other. The room id is an unguessable capability token, so the link is the credential. Video flows once the peer connection establishes, and the cipher pill turns green when the worker confirms it is encrypting.
 
