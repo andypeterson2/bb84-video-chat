@@ -8,7 +8,7 @@ the emulated bench behaves. Loaded once at startup into frozen dataclasses.
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -62,8 +62,6 @@ class ClockConfig:
     #: Frequency offset between the benches, parts-per-billion, drawn in
     #: ±drift_ppb_max at startup (unknown to the detector).
     drift_ppb_max: float = 5_000.0
-    #: Optional slow random-walk of the drift (ppb per second).
-    drift_walk_ppb_per_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,10 +126,6 @@ class BenchConfig:
     def slot_period_ps(self) -> int:
         """Pulse-slot period in picoseconds, from the rep rate."""
         return round(1e12 / self.timing.rep_rate_hz)
-
-    def with_role(self, role: str) -> BenchConfig:
-        """Return a copy with the role overridden (test convenience)."""
-        return replace(self, role=role)
 
 
 _VALID_ROLES = ("source", "detector")

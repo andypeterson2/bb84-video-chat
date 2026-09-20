@@ -44,8 +44,6 @@ gate_fraction = 0.4
 [clock]
 # Frequency offset between the benches (parts-per-billion), drawn in
 # ±drift_ppb_max at startup and unknown to the detector. ~0.5 us/s at 100 MHz.
-drift_ppb_max = 5000.0
-drift_walk_ppb_per_s = 0.0
 
 [timing]
 rep_rate_hz = 100e6        # 10 ns slot period
