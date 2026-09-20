@@ -221,7 +221,7 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
         try:
             limit = int(flask_req.args.get("limit", "20"))
         except ValueError:
-            return jsonify({"error": "limit must be an integer"}), 400
+            return respond_error("bad_request", "limit must be an integer", 400)
         limit = max(1, min(limit, 100))
         return jsonify({"events": rooms.get_events(limit)})
 
