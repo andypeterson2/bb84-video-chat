@@ -57,11 +57,11 @@ const tunable = (name, fallback) => {
   const v = globalThis[name];
   return Number.isFinite(v) && v >= 0 ? v : fallback;
 };
-export const framePeriodMs = () => tunable('QVC_FRAME_PERIOD_MS', FRAME_PERIOD_MS);
-export const frameDeadlineMs = () => tunable('QVC_FRAME_DEADLINE_MS', FRAME_DEADLINE_MS);
-export const streamWatchdogMs = () => tunable('QVC_STREAM_WATCHDOG_MS', STREAM_WATCHDOG_MS);
-export const rotationFloorMs = () => tunable('QVC_ROTATION_FLOOR_MS', ROTATION_FLOOR_MS);
-export const sessionRestartDelayMs = () =>
+const framePeriodMs = () => tunable('QVC_FRAME_PERIOD_MS', FRAME_PERIOD_MS);
+const frameDeadlineMs = () => tunable('QVC_FRAME_DEADLINE_MS', FRAME_DEADLINE_MS);
+const streamWatchdogMs = () => tunable('QVC_STREAM_WATCHDOG_MS', STREAM_WATCHDOG_MS);
+const rotationFloorMs = () => tunable('QVC_ROTATION_FLOOR_MS', ROTATION_FLOOR_MS);
+const sessionRestartDelayMs = () =>
   tunable('QVC_SESSION_RESTART_DELAY_MS', SESSION_RESTART_DELAY_MS);
 
 /** A streaming-session failure that counts and restarts the session. */
@@ -685,7 +685,6 @@ export class ReservoirEngine {
 
   _scheduleInstall() {
     if (this._installTimer || this._pendingKeys.length === 0) return;
-    while (this._pendingKeys.length > POOL_KEY_CAP) this._pendingKeys.shift();
     const wait = Math.max(0, this._lastInstallAt + rotationFloorMs() - Date.now());
     this._installTimer = setTimeout(() => {
       this._installTimer = null;
@@ -741,16 +740,11 @@ export function decodePeerDetections(p) {
 }
 
 function mintBudgetBits(poolLen, qber) {
-  // Display value: bits still needed before a mint can run.
-  let need = TARGET_KEY_BITS;
-  for (let n = poolLen; ; n++) {
-    if (mintable(n, TARGET_KEY_BITS, qber)) {
-      need = n;
-      break;
-    }
-    if (n > poolLen + 4096) break;
-  }
-  return need;
+  // Display value: bits still needed before a mint can run. QBER is bounded by
+  // the acceptance threshold, so a pool always becomes mintable.
+  let n = poolLen;
+  while (!mintable(n, TARGET_KEY_BITS, qber)) n++;
+  return n;
 }
 
 function requireFrame(msg, frameId) {

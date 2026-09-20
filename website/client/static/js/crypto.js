@@ -54,7 +54,7 @@ export async function deriveEpoch(rawKey, subtle) {
 }
 
 /** Minimal big-endian byte length for a non-negative integer (>= 1). */
-export function minBytes(n) {
+function minBytes(n) {
   let len = 1;
   let x = Math.floor(n / 256);
   while (x > 0) {
@@ -65,7 +65,7 @@ export function minBytes(n) {
 }
 
 /** Big-endian bytes of a non-negative integer in `len` bytes. */
-export function writeUint(n, len) {
+function writeUint(n, len) {
   const b = new Uint8Array(len);
   let x = n;
   for (let i = len - 1; i >= 0; i--) {
@@ -76,7 +76,7 @@ export function writeUint(n, len) {
 }
 
 /** Read a big-endian unsigned integer from bytes. */
-export function readUint(bytes) {
+function readUint(bytes) {
   let n = 0;
   for (const b of bytes) n = n * 256 + b;
   return n;
