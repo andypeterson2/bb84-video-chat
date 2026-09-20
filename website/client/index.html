@@ -4,17 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="QKD Video Chat — quantum-secure peer-to-peer video calling.">
-    <!-- Content-Security-Policy: a deliberately staged, permissive policy.
-         No XSS sink exists (peer/user values reach the DOM only via
-         textContent / escapeAttr), but this bounds the blast radius of any
-         future one and blocks cleartext exfil / plugin / object vectors.
-         script-src keeps 'unsafe-inline' for now because render() uses inline
-         on* handlers; the addEventListener refactor that lets us drop it is
-         tracked as a follow-up. style-src/font-src admit Google Fonts (the UI
-         face); connect-src admits https/wss (the signaling origin is
+    <!-- Content-Security-Policy. script-src is 'self': render() carries no
+         inline handlers, so an injected <script> or on* attribute has no way
+         to run. style-src/font-src admit Google Fonts (the UI face);
+         connect-src admits https/wss (the signaling origin is
          operator-configured) plus the loopback daemon. frame-ancestors is
          omitted here (ignored in <meta>); set it as an HTTP header at deploy. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https: wss: ws://localhost:* ws://127.0.0.1:*; base-uri 'self'; object-src 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https: wss: ws://localhost:* ws://127.0.0.1:*; base-uri 'self'; object-src 'none'">
     <title>QKD Video Chat</title>
     <!-- ?v= cache-busters roll the CSS/JS pair over together on deploy; a
          stale cached bootstrap script driving a fresh crypto worker (or vice
