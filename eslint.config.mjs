@@ -23,7 +23,7 @@ const sharedRules = {
 export default [
   { ignores: ['node_modules/**', 'website/client/static/vendor/**'] },
   {
-    // The ES-module client libs (BB84 protocol stack, crypto, signaling, …).
+    // The ES-module client libs (BB84 protocol stack, crypto, bench, …).
     files: ['website/client/static/js/**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',
