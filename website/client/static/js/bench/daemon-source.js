@@ -12,7 +12,7 @@
  * The WebSocket is injectable (a factory) so tests drive a fake transport.
  */
 
-import { packBits, unpackBits, encodeIndices, decodeIndices, toB64, fromB64 } from './packing.js';
+import { packBits, unpackBits, decodeIndices, toB64, fromB64 } from './packing.js';
 
 const PROTO_V = 1;
 
@@ -34,7 +34,6 @@ export class DaemonConnection {
     this._pairReject = null;
     this._sentResolvers = new Map(); // frameId -> resolve(frame-sent)
     this._onDetections = null;
-    this._onStatus = null;
     this._onClose = null;
     this._closed = false;
   }
@@ -110,9 +109,6 @@ export class DaemonConnection {
         if (decoded) this._onDetections?.(decoded);
         break;
       }
-      case 'status':
-        this._onStatus?.(msg);
-        break;
       default:
         break;
     }
@@ -155,10 +151,6 @@ export class DaemonConnection {
 
   onDetections(cb) {
     this._onDetections = cb;
-  }
-
-  onStatus(cb) {
-    this._onStatus = cb;
   }
 
   onClose(cb) {
@@ -249,10 +241,4 @@ export class DaemonFrameSource {
   onDetections(cb) {
     this._conn.onDetections(cb);
   }
-
-  onStatus(cb) {
-    this._conn.onStatus(cb);
-  }
 }
-
-export { packBits, unpackBits, encodeIndices, decodeIndices };

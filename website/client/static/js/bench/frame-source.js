@@ -35,10 +35,6 @@
  *     cb({ frameId, indices: Uint32Array, bits: Uint8Array,
  *          bases: Uint8Array, stats }) — sparse detection set for one frame,
  *     ascending slot order; bits/bases are per-detection.
- *
- *   onStatus(cb)
- *     Telemetry: { detections, slots, ... } — shape is backend-specific and
- *     display-only; the engine never branches on it.
  */
 
 /** Slots per loopback frame — matches the old per-round pulse count. */

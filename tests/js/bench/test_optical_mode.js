@@ -43,7 +43,6 @@ function fakeDaemonPair({ eavesdropper = { on: false } } = {}) {
     startAcquisition: async () => {},
     stopAcquisition: async () => {},
     onDetections: () => {},
-    onStatus: () => {},
     setEavesdropper: (v) => {
       eavesdropper.on = !!v;
     },
@@ -88,7 +87,6 @@ function fakeDaemonPair({ eavesdropper = { on: false } } = {}) {
     onDetections: (cb) => {
       detectorCb = cb;
     },
-    onStatus: () => {},
     reportedQber: [],
     reportQber(value) {
       this.reportedQber.push(value);
