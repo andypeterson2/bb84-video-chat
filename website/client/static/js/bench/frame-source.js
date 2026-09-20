@@ -28,6 +28,9 @@
  *   setEavesdropper(enabled)                    [source role only]
  *     Route the demo Eve toggle to wherever the tap lives.
  *
+ *   reportQber(value)                           [optional]
+ *     A frame's measured QBER, for a backend that steers optics from it.
+ *
  *   onDetections(cb)                            [detector role only]
  *     cb({ frameId, indices: Uint32Array, bits: Uint8Array,
  *          bases: Uint8Array, stats }) — sparse detection set for one frame,

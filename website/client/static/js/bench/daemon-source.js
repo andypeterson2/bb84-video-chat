@@ -148,6 +148,11 @@ export class DaemonConnection {
     this._send({ t: 'eve', enabled: !!enabled });
   }
 
+  /** Detector role: hand the daemon a frame's QBER for its polarization search. */
+  reportQber(value) {
+    this._send({ t: 'qber', value });
+  }
+
   onDetections(cb) {
     this._onDetections = cb;
   }
@@ -234,6 +239,11 @@ export class DaemonFrameSource {
   setEavesdropper(enabled) {
     if (this.role !== 'source') throw new Error('only the source role owns the eavesdropper');
     this._conn.setEavesdropper(enabled);
+  }
+
+  reportQber(value) {
+    if (this.role !== 'detector') return;
+    this._conn.reportQber(value);
   }
 
   onDetections(cb) {

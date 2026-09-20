@@ -594,6 +594,9 @@ export class ReservoirEngine {
     // does not count as measured. Both sides derive `sampled` identically.
     const measured = sampled >= MIN_SAMPLE_SIZE;
     const accept = measured && qber <= QBER_THRESHOLD;
+    // The detector's bench steers its optics from this measurement, so only a
+    // frame that measured one is worth reporting.
+    if (measured) this._source.reportQber?.(qber);
     await channel.send({ type: 'frame-verdict', frameId, qber, accept });
     const theirs = await frames.receive(['frame-verdict'], signal);
     requireFrame(theirs, frameId);
