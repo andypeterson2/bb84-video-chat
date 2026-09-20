@@ -71,7 +71,7 @@ jobs:
           node-version: '20'
 
       - name: Install JS dependencies
-        run: npm install
+        run: npm ci
 
       - name: Lint the client + tests
         run: npm run lint
@@ -104,7 +104,7 @@ jobs:
           pip install -r bench/requirements.txt
 
       - name: Install JS dependencies
-        run: npm install
+        run: npm ci
 
       - name: Install Playwright chromium
         run: npx playwright install --with-deps chromium
