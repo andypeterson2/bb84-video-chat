@@ -38,12 +38,16 @@ SERVICE = "qvc"
 # encrypted media + BB84/QKD path runs peer-to-peer in the browser and is
 # the explicit live-only layer (exempt from the curl-able rule).
 _STREAMING = [
+    {"protocol": "socket.io", "event": "welcome", "description": "Connection acknowledgement carrying the peer's sid."},
     {"protocol": "socket.io", "event": "offer", "description": "Relay SDP offer to the room peer."},
     {"protocol": "socket.io", "event": "answer", "description": "Relay SDP answer to the room peer."},
     {"protocol": "socket.io", "event": "ice-candidate", "description": "Relay ICE candidate to the room peer."},
+    {"protocol": "socket.io", "event": "request-ice-restart", "description": "Ask the initiator to restart ICE."},
     {"protocol": "socket.io", "event": "room-created", "description": "Room-creation result."},
     {"protocol": "socket.io", "event": "room-joined", "description": "Room-join result (both peers)."},
     {"protocol": "socket.io", "event": "peer-disconnected", "description": "Peer left/disconnected notification."},
+    {"protocol": "socket.io", "event": "eve-demo", "description": "Relay the eavesdropper-demo state to the peer."},
+    {"protocol": "socket.io", "event": "error", "description": "Rate-limit or room-operation failure notice."},
     {
         "protocol": "webrtc",
         "description": "Encrypted media + BB84/QKD run peer-to-peer in the browser; not brokered by this server.",
