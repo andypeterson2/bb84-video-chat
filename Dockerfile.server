@@ -11,4 +11,9 @@ COPY signaling/ signaling/
 
 ENV SIO_ASYNC_MODE=eventlet
 
+# The server binds a high port from QVC_SERVER_REST_PORT and writes nothing, so
+# it needs no privilege. Runs unprivileged; /app stays read-only to it.
+RUN useradd --system --no-create-home --uid 10001 qvc
+USER qvc
+
 CMD ["python", "-m", "signaling.main"]
