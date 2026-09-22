@@ -1199,13 +1199,6 @@ export function init() {
   render();
 }
 
-// A module script is deferred, so the document may already be parsed by now.
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
-}
-
 /* Test surface: the internals the render tests drive. */
 export { state, render, parseRoomToken, resetSession, bindDelegates };
 export const setPendingRoomToken = (v) => {
