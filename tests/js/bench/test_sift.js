@@ -10,6 +10,7 @@ import {
   splitSample,
   estimateQber,
   MAX_SAMPLE_SIZE,
+  MIN_SAMPLE_SIZE,
 } from '../../../website/client/static/js/bench/sift.js';
 import { randomBits } from '../../../website/client/static/js/bench/packing.js';
 
@@ -60,6 +61,24 @@ describe('QBER sampling', () => {
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     for (const p of positions) expect(p).toBeGreaterThanOrEqual(0);
     for (const p of positions) expect(p).toBeLessThan(1000);
+  });
+
+  test('a frame too small to sample yields no sample at all', () => {
+    // estimateQber over an empty sample returns 0, which is why the engine
+    // rejects anything under MIN_SAMPLE_SIZE rather than trusting it.
+    for (const sifted of [0, 1, 3]) {
+      expect(chooseSamplePositions(sifted)).toEqual([]);
+      expect(estimateQber([], [])).toBe(0);
+      expect(0).toBeLessThan(MIN_SAMPLE_SIZE);
+    }
+  });
+
+  test('the floor sits below what the shipped backends produce', () => {
+    // The emulated optical bench's worst frame over 400 sampled 21 bits; the
+    // loopback backend always reaches the cap.
+    expect(MIN_SAMPLE_SIZE).toBeLessThan(21);
+    expect(chooseSamplePositions(84).length).toBeGreaterThanOrEqual(MIN_SAMPLE_SIZE);
+    expect(chooseSamplePositions(8192).length).toBe(MAX_SAMPLE_SIZE);
   });
 
   test('positions vary between draws (crypto-random, not a fixed prefix)', () => {

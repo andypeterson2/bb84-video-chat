@@ -18,6 +18,17 @@ import { randomBits } from './packing.js';
 export const SAMPLE_FRACTION = 0.25;
 /** Cap on per-frame sample size — enough for gate decisions, cheap to send. */
 export const MAX_SAMPLE_SIZE = 128;
+/**
+ * Floor on per-frame sample size. A frame that cannot disclose this many bits
+ * is rejected rather than accepted, because `estimateQber` over a tiny sample
+ * says almost nothing — and over an empty one it returns 0, which would pass
+ * the threshold check on a frame whose error rate was never measured.
+ *
+ * 16 is below anything the shipped backends produce: over 400 emulated optical
+ * frames the smallest sample was 21, and the loopback backend always reaches
+ * the 128 cap. So this rejects degenerate frames without costing real ones.
+ */
+export const MIN_SAMPLE_SIZE = 16;
 
 /**
  * Source side: given the frame's full preparation and the detector's

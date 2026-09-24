@@ -36,6 +36,7 @@ import {
   chooseSamplePositions,
   splitSample,
   estimateQber,
+  MIN_SAMPLE_SIZE,
 } from './sift.js';
 import { distillSource, distillDetector, mintable, DistillError, DEFAULT_QBER } from './distill.js';
 import { DEFAULT_SLOTS_PER_FRAME } from './frame-source.js';
@@ -475,6 +476,7 @@ export class ReservoirEngine {
         frameId,
         qber,
         remaining,
+        sampled: sample.length,
         stats: { sifted: keyBits.length, slots: this._slots },
       });
     } finally {
@@ -537,6 +539,7 @@ export class ReservoirEngine {
         frameId,
         qber,
         remaining,
+        sampled: sample.length,
         stats: { sifted: keyBits.length, slots: open.slots },
       });
     } finally {
@@ -586,8 +589,11 @@ export class ReservoirEngine {
   /* Shared frame tail: verdicts, pooling, telemetry */
 
   async _exchangeVerdict(frames, channel, signal, frame) {
-    const { frameId, qber, remaining, stats } = frame;
-    const accept = qber <= QBER_THRESHOLD;
+    const { frameId, qber, remaining, stats, sampled } = frame;
+    // An empty sample estimates QBER as 0, so a frame disclosing too few bits
+    // does not count as measured. Both sides derive `sampled` identically.
+    const measured = sampled >= MIN_SAMPLE_SIZE;
+    const accept = measured && qber <= QBER_THRESHOLD;
     await channel.send({ type: 'frame-verdict', frameId, qber, accept });
     const theirs = await frames.receive(['frame-verdict'], signal);
     requireFrame(theirs, frameId);
@@ -600,7 +606,8 @@ export class ReservoirEngine {
       this._exhausted = false;
     } else {
       this._failures++;
-      this._onState({ phase: 'failed', reason: 'qber-exceeded', qber, frameId });
+      const reason = measured ? 'qber-exceeded' : 'sample-too-small';
+      this._onState({ phase: 'failed', reason, qber, frameId });
       if (this._failures >= MAX_CONSECUTIVE_FAILURES) {
         this._latch();
         this._onState({ phase: 'exhausted', failures: this._failures });
