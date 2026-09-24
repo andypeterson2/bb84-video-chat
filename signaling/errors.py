@@ -18,18 +18,16 @@ from werkzeug.exceptions import HTTPException
 
 _log = logging.getLogger(__name__)
 
-# Stable machine codes for framework-raised HTTP errors (404, 405, 500, ...).
+# Stable machine codes for framework-raised HTTP errors. Only the statuses this
+# server can actually reach: routing produces 404 and 405, an unhandled view
+# raises 500, and werkzeug can raise 400 on a malformed request. There is no
+# auth challenge, conflict, body parsing or content negotiation here, and rate
+# limiting rejects at Socket.IO connect rather than as HTTP. Anything else falls
+# through to the "http_error" default below.
 _STATUS_CODES = {
     400: "bad_request",
-    401: "unauthorized",
-    403: "forbidden",
     404: "not_found",
     405: "method_not_allowed",
-    409: "conflict",
-    413: "payload_too_large",
-    415: "unsupported_media_type",
-    422: "unprocessable_entity",
-    429: "rate_limited",
     500: "internal_error",
 }
 

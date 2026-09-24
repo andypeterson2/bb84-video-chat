@@ -1,6 +1,9 @@
+# The dev environment CI installs. Keep this the single list, so a local run
+# matches the one that gates merges.
 pytest
-pytest-mock
-pytest-cov
+pytest-timeout
+# Contract tests validate live responses against the shared API schemas.
+jsonschema
 # Compatible-release pin: the enforced rule set shifts with ruff minors, so
 # CI must not float across them.
 ruff~=0.15.16

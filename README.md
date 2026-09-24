@@ -61,8 +61,8 @@ The daemon is asyncio and `websockets`, in its own process. Eventlet's monkey-pa
 ## Tests
 
 ```bash
-pip install pytest
-python -m pytest tests/signaling/ -v      # signaling server and bench daemon
+pip install -r requirements-dev.txt
+python -m pytest tests/signaling/ tests/bench/ tests/contract/ -v   # server, bench daemon, API contract
 npm install && npm test                   # vitest: crypto, BB84, reservoir, bench, UI
 npx playwright install chromium
 npm run test:e2e                          # two browser contexts through a real call
