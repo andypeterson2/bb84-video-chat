@@ -91,7 +91,7 @@ def detect(
         t_bob = clock.to_detector(t_alice) + r_jitter.gauss(0.0, cfg.detector.jitter_sigma_ps)
         raw.append(Click(round(t_bob), detector_id(measure_basis, bit)))
 
-    raw.extend(_dark_counts(cfg, clock, len(records)))
+    raw.extend(_dark_counts(cfg, clock))
     raw.sort(key=lambda c: c.t_ps)
     return _apply_dead_time(raw, cfg.detector.dead_time_ns)
 
@@ -113,7 +113,7 @@ def _click_prob(survivors: int, efficiency: float) -> float:
     return 1.0 - (1.0 - efficiency) ** survivors
 
 
-def _dark_counts(cfg: BenchConfig, clock: ClockModel, _n_records: int) -> list[Click]:
+def _dark_counts(cfg: BenchConfig, clock: ClockModel) -> list[Click]:
     """Poisson dark clicks across the frame's acquisition window."""
     r = rng.stream(cfg.seed, rng.STAGE_DARK)
     slot_ps = cfg.slot_period_ps()

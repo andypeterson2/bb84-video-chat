@@ -16,9 +16,9 @@ import { pipelineModel, createPipeline } from './pipeline.js';
 
 /* Formatters */
 
-export const fmt = (v, unit = '') => (v === null || v === undefined ? '—' : `${v}${unit}`);
-export const pct = (v) => (typeof v === 'number' ? (v * 100).toFixed(1) + '%' : '—');
-export const mmss = (s) => {
+const fmt = (v, unit = '') => (v === null || v === undefined ? '—' : `${v}${unit}`);
+const pct = (v) => (typeof v === 'number' ? (v * 100).toFixed(1) + '%' : '—');
+const mmss = (s) => {
   const n = s || 0;
   return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
 };
@@ -153,7 +153,7 @@ export function drawQberChart(canvas, history, threshold, warning) {
 }
 
 /** A minimal sparkline of a numeric series, normalized to its own min/max. */
-export function drawSparkline(canvas, series, colorToken = '--accent') {
+function drawSparkline(canvas, series, colorToken = '--accent') {
   if (!canvas) return;
   const { ctx, w, h } = prepCanvas(canvas);
   ctx.clearRect(0, 0, w, h);

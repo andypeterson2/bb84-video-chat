@@ -12,7 +12,7 @@
  * The WebSocket is injectable (a factory) so tests drive a fake transport.
  */
 
-import { packBits, unpackBits, encodeIndices, decodeIndices, toB64, fromB64 } from './packing.js';
+import { packBits, unpackBits, decodeIndices, toB64, fromB64 } from './packing.js';
 
 const PROTO_V = 1;
 
@@ -34,7 +34,6 @@ export class DaemonConnection {
     this._pairReject = null;
     this._sentResolvers = new Map(); // frameId -> resolve(frame-sent)
     this._onDetections = null;
-    this._onStatus = null;
     this._onClose = null;
     this._closed = false;
   }
@@ -110,9 +109,6 @@ export class DaemonConnection {
         if (decoded) this._onDetections?.(decoded);
         break;
       }
-      case 'status':
-        this._onStatus?.(msg);
-        break;
       default:
         break;
     }
@@ -148,12 +144,13 @@ export class DaemonConnection {
     this._send({ t: 'eve', enabled: !!enabled });
   }
 
-  onDetections(cb) {
-    this._onDetections = cb;
+  /** Detector role: hand the daemon a frame's QBER for its polarization search. */
+  reportQber(value) {
+    this._send({ t: 'qber', value });
   }
 
-  onStatus(cb) {
-    this._onStatus = cb;
+  onDetections(cb) {
+    this._onDetections = cb;
   }
 
   onClose(cb) {
@@ -236,13 +233,12 @@ export class DaemonFrameSource {
     this._conn.setEavesdropper(enabled);
   }
 
+  reportQber(value) {
+    if (this.role !== 'detector') return;
+    this._conn.reportQber(value);
+  }
+
   onDetections(cb) {
     this._conn.onDetections(cb);
   }
-
-  onStatus(cb) {
-    this._conn.onStatus(cb);
-  }
 }
-
-export { packBits, unpackBits, encodeIndices, decodeIndices };

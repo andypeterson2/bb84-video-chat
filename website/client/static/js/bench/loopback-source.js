@@ -36,7 +36,6 @@ export class LoopbackFrameSource {
     this._channelOptions = { ...CHANNEL_OPTIONS, ...channelOptions };
     this._eavesdropper = false;
     this._onDetections = null;
-    this._onStatus = null;
     this._started = false;
   }
 
@@ -63,10 +62,6 @@ export class LoopbackFrameSource {
 
   onDetections(cb) {
     this._onDetections = cb;
-  }
-
-  onStatus(cb) {
-    this._onStatus = cb;
   }
 
   /**
@@ -111,7 +106,6 @@ export class LoopbackFrameSource {
       bases: Uint8Array.from(detBases),
       stats: { slots, detections: indices.length },
     };
-    this._onStatus?.({ slots, detections: indices.length });
     this._sendToPeer?.(detections);
   }
 
@@ -121,7 +115,6 @@ export class LoopbackFrameSource {
    */
   deliverDetections(detections) {
     if (this.role !== 'detector') throw new Error('deliverDetections is a detector-role operation');
-    this._onStatus?.(detections.stats ?? {});
     this._onDetections?.(detections);
   }
 }

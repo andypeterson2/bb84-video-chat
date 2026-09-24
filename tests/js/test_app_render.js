@@ -1,19 +1,36 @@
 /**
- * Render tests for the page bootstrap script, loaded via the Function
- * constructor. Pins the lobby (invite link, join-input preservation), the
- * cipher pill for every worker state, and the room-token parser both entry
- * points share.
+ * Render tests for the page bootstrap. Pins the lobby (invite link,
+ * join-input preservation), the cipher pill for every worker state, and the
+ * room-token parser both entry points share.
  */
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const APP_JS_PATH = resolve(__dirname, '../../website/client/static/app.js');
+const APP_MODULE = '../../website/client/static/app.js';
+
+/** An in-memory Storage, so these tests never depend on the host's. */
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+    clear: () => map.clear(),
+    key: (i) => [...map.keys()][i] ?? null,
+    get length() {
+      return map.size;
+    },
+  };
+}
 
 function setupGlobals() {
   // Only touched at connect/call time, but they must exist at load.
   globalThis.io = () => ({ on: () => {}, emit: () => {}, disconnect: () => {} });
+  for (const name of ['localStorage', 'sessionStorage']) {
+    Object.defineProperty(globalThis, name, {
+      value: memoryStorage(),
+      configurable: true,
+      writable: true,
+    });
+  }
   const ctxStub = new Proxy({}, { get: (t, prop) => (prop === 'canvas' ? {} : () => ctxStub) });
   HTMLCanvasElement.prototype.getContext = function () {
     return ctxStub;
@@ -21,31 +38,20 @@ function setupGlobals() {
 }
 
 /**
- * Load the bootstrap into the jsdom context. Top-level const/let become var so
- * the trailing return can hand the internals back to the tests.
+ * Import a fresh copy of the bootstrap. resetModules gives each test its own
+ * module state, so one test's session cannot leak into the next.
  */
-function loadApp() {
-  let code = readFileSync(APP_JS_PATH, 'utf-8');
-  code = code.replace(/^(const|let) /gm, 'var ');
-  const script = new Function(
-    code +
-      `
-    return {
-      state, render, parseRoomToken, resetSession,
-      setPendingRoomToken: (v) => { pendingRoomToken = v; },
-      getPendingRoomToken: () => pendingRoomToken,
-    };
-  `,
-  );
-  return script();
+async function loadApp() {
+  vi.resetModules();
+  return import(APP_MODULE);
 }
 
 let app;
 
-beforeEach(() => {
+beforeEach(async () => {
   document.body.innerHTML = '<div id="app"></div>';
   setupGlobals();
-  app = loadApp();
+  app = await loadApp();
 });
 
 describe('lobby rendering', () => {

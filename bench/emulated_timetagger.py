@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from bench import physics
 from bench.clock import ClockModel, sample_clock
 from bench.drivers import Click, TimeTaggerDriver
-from bench.pol_compensator import EmulatedPolarization
+from bench.pol_compensator import CoordinateDescentCompensator, EmulatedPolarization
 
 if TYPE_CHECKING:
     from bench.config import BenchConfig
@@ -35,16 +35,8 @@ class EmulatedTimeTagger(TimeTaggerDriver):
             ClockModel(0, 0.0, 0.0) if cfg.sync.mode == "shared-clock" else sample_clock(cfg)
         )
         self._pol = EmulatedPolarization(cfg)
+        self._compensator = CoordinateDescentCompensator()
         self._running = False
-
-    #: shared-clock benches declare a hardware sync input.
-    @property
-    def has_sync_input(self) -> bool:  # type: ignore[override]
-        """Whether this bench has a hardware sync input (shared-clock mode)."""
-        return self._cfg.sync.mode == "shared-clock"
-
-    def configure(self, config: object) -> None:
-        """No-op: the emulated detector takes its parameters at construction."""
 
     async def start(self) -> None:
         """Begin acquisition."""
@@ -54,21 +46,19 @@ class EmulatedTimeTagger(TimeTaggerDriver):
         """End acquisition."""
         self._running = False
 
-    async def clicks(self):  # pragma: no cover - real-hardware streaming path
-        """Streaming click interface (real-hardware contract).
-
-        The emulator drives detection per fiber frame via `detect()`; a real
-        timetagger would yield a continuous stream here and the daemon would
-        segment frames using the sync string. Present so the class satisfies
-        the driver contract; not exercised by the emulated daemon.
-        """
-        return
-        yield  # unreachable; marks this an async generator
-
     @property
     def clock(self) -> ClockModel:
         """The (test-visible) ground-truth clock the recovery must invert."""
         return self._clock
+
+    @property
+    def compensator(self) -> CoordinateDescentCompensator:
+        """The polarization search tracking this bench's fiber."""
+        return self._compensator
+
+    def report_qber(self, observed_qber: float) -> None:
+        """Feed the search one frame's measured QBER, from the browser."""
+        self._compensator.step(observed_qber)
 
     def detect(self, frame: FiberFrame) -> list[Click]:
         """Detect one fiber frame's pulses; advance the fiber polarization."""
@@ -76,4 +66,7 @@ class EmulatedTimeTagger(TimeTaggerDriver):
             msg = "detect() before start()"
             raise RuntimeError(msg)
         self._pol.step()
-        return physics.detect(frame.pulses, self._cfg, self._clock, self._pol.angle_rad)
+        # What the detector sees is the fiber's rotation less what the
+        # compensator currently applies.
+        residual = self._pol.angle_rad - self._compensator.compensation_rad()
+        return physics.detect(frame.pulses, self._cfg, self._clock, residual)

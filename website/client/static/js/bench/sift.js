@@ -12,10 +12,8 @@
  * Sampled bits are disclosed and removed from the key material.
  */
 
-import { randomBits } from './packing.js';
-
 /** Default fraction of a frame's sifted bits sacrificed to the QBER sample. */
-export const SAMPLE_FRACTION = 0.25;
+const SAMPLE_FRACTION = 0.25;
 /** Cap on per-frame sample size — enough for gate decisions, cheap to send. */
 export const MAX_SAMPLE_SIZE = 128;
 /**
@@ -78,8 +76,8 @@ export function siftDetector(detBits, detBases, srcBasesAtIndices) {
  * Choose crypto-random distinct sample positions within a sifted string.
  * @returns {number[]} ascending positions
  */
-export function chooseSamplePositions(siftedLength, fraction = SAMPLE_FRACTION) {
-  const want = Math.min(MAX_SAMPLE_SIZE, Math.floor(siftedLength * fraction));
+export function chooseSamplePositions(siftedLength) {
+  const want = Math.min(MAX_SAMPLE_SIZE, Math.floor(siftedLength * SAMPLE_FRACTION));
   if (want <= 0) return [];
   // Rejection-free selection: random sort keys over all positions would be
   // O(n log n); at frame scale a Floyd-style sample keeps it O(want).
@@ -125,5 +123,3 @@ export function estimateQber(mine, theirs) {
   }
   return errors / mine.length;
 }
-
-export { randomBits };

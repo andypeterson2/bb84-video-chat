@@ -41,15 +41,17 @@ test('two benches negotiate optical mode and mint a shared key', async ({ browse
     const sasA = await sasDigits(pageA);
     expect(sasA).toBe(await sasDigits(pageB));
 
-    // Eve drives QBER over threshold: the channel latches red (SAS strip and its
-    // reject control stay visible) and recovers when Eve is removed.
-    await pageA.evaluate(() => window.toggleEavesdropper());
+    // Eve drives QBER over threshold: the channel latches red, and recovers
+    // once Eve goes. Her toggle sits in the reservoir panel, collapsed by default.
+    await pageA.locator('[data-action="toggle-dashboard"]').click();
+    await expect(pageA.locator('.qd-body')).toBeVisible();
+    await pageA.locator('[data-action="toggle-eve"]').click();
     await expect(pageA.locator('.cipher-pill')).toContainText('integrity lost', {
       timeout: 45_000,
     });
     await expect(pageA.locator('.sas-mismatch')).toBeVisible();
 
-    await pageA.evaluate(() => window.toggleEavesdropper());
+    await pageA.locator('[data-action="toggle-eve"]').click();
     await expectEncrypted(pageA);
   } finally {
     await alice.close();

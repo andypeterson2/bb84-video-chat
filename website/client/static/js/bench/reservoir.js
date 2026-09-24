@@ -43,6 +43,17 @@ import { DEFAULT_SLOTS_PER_FRAME } from './frame-source.js';
 
 const QBER_THRESHOLD = 0.11;
 const MAX_CONSECUTIVE_FAILURES = 3;
+/**
+ * Failure reasons that count toward the latch. The latch means no fresh key is
+ * obtainable from the channel itself, so it is driven by what the measurement
+ * says — a QBER over threshold, a frame that could not be measured, a broken
+ * integrity check. Transport trouble (a deadline, a desync) says nothing about
+ * the channel's security and restarts instead, or a slow link would paint the
+ * call red and leave it there.
+ */
+const LATCHING_REASONS = new Set(['integrity', 'qber-exceeded', 'sample-too-small']);
+/** Restart backoff grows to this multiple of the base delay. */
+const MAX_RESTART_BACKOFF = 8;
 const TARGET_KEY_BITS = 128;
 const POOL_KEY_CAP = 4;
 
@@ -57,11 +68,11 @@ const tunable = (name, fallback) => {
   const v = globalThis[name];
   return Number.isFinite(v) && v >= 0 ? v : fallback;
 };
-export const framePeriodMs = () => tunable('QVC_FRAME_PERIOD_MS', FRAME_PERIOD_MS);
-export const frameDeadlineMs = () => tunable('QVC_FRAME_DEADLINE_MS', FRAME_DEADLINE_MS);
-export const streamWatchdogMs = () => tunable('QVC_STREAM_WATCHDOG_MS', STREAM_WATCHDOG_MS);
-export const rotationFloorMs = () => tunable('QVC_ROTATION_FLOOR_MS', ROTATION_FLOOR_MS);
-export const sessionRestartDelayMs = () =>
+const framePeriodMs = () => tunable('QVC_FRAME_PERIOD_MS', FRAME_PERIOD_MS);
+const frameDeadlineMs = () => tunable('QVC_FRAME_DEADLINE_MS', FRAME_DEADLINE_MS);
+const streamWatchdogMs = () => tunable('QVC_STREAM_WATCHDOG_MS', STREAM_WATCHDOG_MS);
+const rotationFloorMs = () => tunable('QVC_ROTATION_FLOOR_MS', ROTATION_FLOOR_MS);
+const sessionRestartDelayMs = () =>
   tunable('QVC_SESSION_RESTART_DELAY_MS', SESSION_RESTART_DELAY_MS);
 
 /** A streaming-session failure that counts and restarts the session. */
@@ -193,6 +204,7 @@ export class ReservoirEngine {
     this._destroyed = false;
     this._exhausted = false;
     this._failures = 0;
+    this._transportFailures = 0;
     this._sessionN = -1;
     this._session = null; // {n, abort, router, channel}
     this._frameId = 0;
@@ -275,6 +287,7 @@ export class ReservoirEngine {
   setEavesdropper(enabled) {
     if (this._isSource) this._source.setEavesdropper(enabled);
     this._failures = 0;
+    this._transportFailures = 0;
     if (this._exhausted) {
       this._exhausted = false;
       if (this._isSource && !this._session) {
@@ -394,7 +407,6 @@ export class ReservoirEngine {
     // A session already torn down fails late; that must not end its successor.
     if (this._destroyed || this._session !== session) return;
     this._teardownSession('failure');
-    this._failures++;
     const reason =
       err instanceof DistillError || err?.name === 'ChannelAuthError'
         ? 'integrity'
@@ -404,19 +416,34 @@ export class ReservoirEngine {
             ? err.reason
             : 'error';
     this._onState({ phase: 'failed', reason, error: err });
-    if (this._failures >= MAX_CONSECUTIVE_FAILURES) {
-      // The latch stops the SOURCE from opening sessions; the detector keeps
-      // following restart announcements — that is how it recovers.
-      this._latch();
-      this._onState({ phase: 'exhausted', failures: this._failures });
+
+    if (LATCHING_REASONS.has(reason)) {
+      this._failures++;
+      if (this._failures >= MAX_CONSECUTIVE_FAILURES) {
+        // The latch stops the SOURCE from opening sessions; the detector keeps
+        // following restart announcements — that is how it recovers.
+        this._latch();
+        this._onState({ phase: 'exhausted', failures: this._failures });
+        return;
+      }
+      this._scheduleRestart(sessionRestartDelayMs());
       return;
     }
-    if (this._isSource) {
-      this._restartTimer = setTimeout(() => {
-        if (this._destroyed || this._exhausted) return;
-        this._announceSession(this._sessionN + 1);
-      }, sessionRestartDelayMs());
-    }
+
+    // Transport trouble: back off, then keep trying. A link that stays down
+    // surfaces through the peer connection's own state.
+    this._transportFailures++;
+    const backoff = Math.min(2 ** (this._transportFailures - 1), MAX_RESTART_BACKOFF);
+    this._scheduleRestart(sessionRestartDelayMs() * backoff);
+  }
+
+  /** @private open the next session after `wait` ms (source side only). */
+  _scheduleRestart(wait) {
+    if (!this._isSource) return;
+    this._restartTimer = setTimeout(() => {
+      if (this._destroyed || this._exhausted) return;
+      this._announceSession(this._sessionN + 1);
+    }, wait);
   }
 
   /* Source side */
@@ -594,6 +621,9 @@ export class ReservoirEngine {
     // does not count as measured. Both sides derive `sampled` identically.
     const measured = sampled >= MIN_SAMPLE_SIZE;
     const accept = measured && qber <= QBER_THRESHOLD;
+    // The detector's bench steers its optics from this measurement, so only a
+    // frame that measured one is worth reporting.
+    if (measured) this._source.reportQber?.(qber);
     await channel.send({ type: 'frame-verdict', frameId, qber, accept });
     const theirs = await frames.receive(['frame-verdict'], signal);
     requireFrame(theirs, frameId);
@@ -603,6 +633,7 @@ export class ReservoirEngine {
       this._poolErrors += qber * remaining.length;
       this._acceptedFrames.push(frameId);
       this._failures = 0;
+      this._transportFailures = 0;
       this._exhausted = false;
     } else {
       this._failures++;
@@ -682,7 +713,6 @@ export class ReservoirEngine {
 
   _scheduleInstall() {
     if (this._installTimer || this._pendingKeys.length === 0) return;
-    while (this._pendingKeys.length > POOL_KEY_CAP) this._pendingKeys.shift();
     const wait = Math.max(0, this._lastInstallAt + rotationFloorMs() - Date.now());
     this._installTimer = setTimeout(() => {
       this._installTimer = null;
@@ -738,16 +768,11 @@ export function decodePeerDetections(p) {
 }
 
 function mintBudgetBits(poolLen, qber) {
-  // Display value: bits still needed before a mint can run.
-  let need = TARGET_KEY_BITS;
-  for (let n = poolLen; ; n++) {
-    if (mintable(n, TARGET_KEY_BITS, qber)) {
-      need = n;
-      break;
-    }
-    if (n > poolLen + 4096) break;
-  }
-  return need;
+  // Display value: bits still needed before a mint can run. QBER is bounded by
+  // the acceptance threshold, so a pool always becomes mintable.
+  let n = poolLen;
+  while (!mintable(n, TARGET_KEY_BITS, qber)) n++;
+  return n;
 }
 
 function requireFrame(msg, frameId) {

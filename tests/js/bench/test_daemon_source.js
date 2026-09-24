@@ -100,6 +100,16 @@ describe('DaemonFrameSource (source role)', () => {
     await txPromise; // resolves only on the matching frame-sent
   });
 
+  test('a source-role bench does not report QBER (it owns no detector)', async () => {
+    const { conn, ws, promise } = connect();
+    ws.fireOpen();
+    ws.deliver({ t: 'paired', role: 'source' });
+    await promise;
+    const before = ws.sent.length;
+    new DaemonFrameSource(conn).reportQber(0.04);
+    expect(ws.sent).toHaveLength(before);
+  });
+
   test('eve control sends an eve message', async () => {
     const { conn, ws, promise } = connect();
     ws.fireOpen();
@@ -135,6 +145,16 @@ describe('DaemonFrameSource (detector role)', () => {
     expect(Array.from(got[0].indices)).toEqual([2, 5, 9]);
     expect(Array.from(got[0].bits)).toEqual([1, 0, 1]);
     expect(Array.from(got[0].bases)).toEqual([0, 1, 1]);
+  });
+
+  test('a measured QBER reaches the daemon for its polarization search', async () => {
+    const { conn, ws, promise } = connect();
+    ws.fireOpen();
+    ws.deliver({ t: 'paired', role: 'detector' });
+    await promise;
+    const source = new DaemonFrameSource(conn);
+    source.reportQber(0.037);
+    expect(ws.sent.at(-1)).toEqual({ t: 'qber', value: 0.037 });
   });
 
   test('transmit and eve are rejected on a detector source', async () => {

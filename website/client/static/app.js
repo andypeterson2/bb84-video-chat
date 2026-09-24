@@ -1008,7 +1008,7 @@ function render() {
       <div class="header">
         <h1>QKD Video Chat</h1>
         <div class="header-right">
-          <button class="analytics-btn" onclick="openAnalytics()" title="Open the live analytics screen in a new window">${ICONS.analytics}<span>Analytics</span></button>
+          <button class="analytics-btn" data-action="open-analytics" title="Open the live analytics screen in a new window">${ICONS.analytics}<span>Analytics</span></button>
           <div class="status"><span class="dot ${state.signalingConnected ? 'dot--ok' : 'dot--off'}"></span>${state.signalingConnected ? 'Connected' : 'Offline'}</div>
         </div>
       </div>
@@ -1026,27 +1026,27 @@ function render() {
               : state.waitingForPeer
                 ? `<div class="lobby-waiting"><span class="lobby-waiting-spinner"></span><span>Waiting for your partner to join…</span></div>
           <div class="invite">
-            <input id="invite-link" class="invite-link" type="text" readonly onclick="this.select()">
-            <button class="btn" onclick="copyJoinLink()">Copy link</button>
+            <input id="invite-link" class="invite-link" type="text" readonly data-action="select-all">
+            <button class="btn" data-action="copy-link">Copy link</button>
           </div>
           <p class="lobby-hint">Send this link to the person you want to call.</p>`
                 : `${state.invited ? `<p class="lobby-invited">You’ve been invited to a call — join below, or start your own.</p>` : ''}
-          <button class="btn ${state.invited ? '' : 'btn--primary'}" onclick="handleCreateRoom()" ${lobbyReady() ? '' : 'disabled'}>Start Session</button>
+          <button class="btn ${state.invited ? '' : 'btn--primary'}" data-action="create-room" ${lobbyReady() ? '' : 'disabled'}>Start Session</button>
           ${state.mediaError ? `<div class="form-error">${state.mediaError}</div>` : ''}
-          <form onsubmit="handleJoinRoom(event)" class="join-form">
+          <form data-action="join-room" class="join-form">
             <input id="room-input" type="text" placeholder="Paste invite link" autocomplete="off" ${lobbyReady() ? '' : 'disabled'}>
             <button type="submit" class="btn ${state.invited ? 'btn--primary' : ''}" ${lobbyReady() ? '' : 'disabled'}>Join</button>
           </form>
           <div class="optical">
             <label class="optical-toggle">
-              <input type="checkbox" ${state.optical.enabled ? 'checked' : ''} onchange="toggleOptical(this.checked)">
+              <input type="checkbox" ${state.optical.enabled ? 'checked' : ''} data-action="toggle-optical">
               <span>Use optical bench (hardware daemon)</span>
             </label>
             ${
               state.optical.enabled
                 ? `<div class="optical-fields">
-              <input id="optical-url" class="optical-input" type="text" placeholder="ws://127.0.0.1:8781" value="${escapeAttr(state.optical.url)}" oninput="setOpticalField('url', this.value)">
-              <input id="optical-token" class="optical-input" type="password" placeholder="Pairing token (from daemon)" oninput="setOpticalField('token', this.value)">
+              <input id="optical-url" class="optical-input" type="text" placeholder="ws://127.0.0.1:8781" value="${escapeAttr(state.optical.url)}" data-action="optical-url">
+              <input id="optical-token" class="optical-input" type="password" placeholder="Pairing token (from daemon)" data-action="optical-token">
               <span class="optical-hint">Both peers need a bench for optical mode; otherwise the call uses the simulator.</span>
               ${state.opticalStatus ? `<span class="optical-status ${state.opticalStatus === 'unavailable' ? 'optical-status--error' : ''}">Daemon: ${state.opticalStatus}</span>` : ''}
             </div>`
@@ -1056,8 +1056,8 @@ function render() {
           }
         </div>
         <div class="media-controls">
-          <button class="media-btn ${state.cameraOn ? '' : 'media-btn--off'}" onclick="toggleCamera()">${state.cameraOn ? ICONS.cameraOn : ICONS.cameraOff}</button>
-          <button class="media-btn ${state.muted ? 'media-btn--off' : ''}" onclick="toggleMute()">${state.muted ? ICONS.micOff : ICONS.micOn}</button>
+          <button class="media-btn ${state.cameraOn ? '' : 'media-btn--off'}" data-action="toggle-camera">${state.cameraOn ? ICONS.cameraOn : ICONS.cameraOff}</button>
+          <button class="media-btn ${state.muted ? 'media-btn--off' : ''}" data-action="toggle-mute">${state.muted ? ICONS.micOff : ICONS.micOn}</button>
         </div>
         </div>
       </div>
@@ -1114,8 +1114,8 @@ function render() {
           <strong class="sas-digits" id="sas-digits"></strong>
           <span class="sas-hint">Compare on camera. If the emoji or digits differ, someone is between you — hang up.</span>
           <div class="sas-actions">
-            <button class="btn-verify" onclick="handleSasVerify()">Matches — verify</button>
-            <button class="sas-mismatch" onclick="handleSasMismatch()">Doesn't match</button>
+            <button class="btn-verify" data-action="sas-verify">Matches — verify</button>
+            <button class="sas-mismatch" data-action="sas-mismatch">Doesn't match</button>
           </div>
         </div>`
             : ''
@@ -1124,7 +1124,7 @@ function render() {
           ${
             state.bb84Active
               ? `
-            <button class="qd-toggle" onclick="toggleDashboard()" aria-expanded="${state.dashboardExpanded}">
+            <button class="qd-toggle" data-action="toggle-dashboard" aria-expanded="${state.dashboardExpanded}">
               <span class="qd-title" title="BB84 — the quantum key-distribution protocol that generates this call's encryption keys.">BB84 Key Reservoir</span>
               <span class="qd-mode qd-mode--${state.mode || 'pending'}" title="Whether keys come from a real optical bench or the in-browser simulator.">${modeBadge()}</span>
               <span class="qd-badge qd-status--${qberStatus()}" title="Quantum channel noise. This is a link-quality readout, not the encryption status — that's the pill above.">${qberStatusLabel()}</span>
@@ -1146,7 +1146,7 @@ function render() {
             </div>
             <canvas id="qd-chart" class="qd-chart"></canvas>
             ${netDiagLine()}
-            ${state.isInitiator ? `<button class="qd-eve-btn ${state.eavesdropper ? 'qd-eve-btn--active' : ''}" onclick="toggleEavesdropper()">${state.eavesdropper ? 'Eavesdropper active — click to remove' : 'Simulate eavesdropper'}</button>` : ''}
+            ${state.isInitiator ? `<button class="qd-eve-btn ${state.eavesdropper ? 'qd-eve-btn--active' : ''}" data-action="toggle-eve">${state.eavesdropper ? 'Eavesdropper active — click to remove' : 'Simulate eavesdropper'}</button>` : ''}
           </div>`
                 : ''
             }`
@@ -1154,10 +1154,10 @@ function render() {
           }
         </div>
         <div class="toolbar">
-          <button class="media-btn ${state.cameraOn ? '' : 'media-btn--off'}" onclick="toggleCamera()">${state.cameraOn ? ICONS.cameraOn : ICONS.cameraOff}</button>
-          <button class="media-btn ${state.muted ? 'media-btn--off' : ''}" onclick="toggleMute()">${state.muted ? ICONS.micOff : ICONS.micOn}</button>
-          <button class="media-btn" onclick="openAnalytics()" title="Open the live analytics screen in a new window">${ICONS.analytics}</button>
-          <button class="btn btn--danger" onclick="handleLeave()">${ICONS.phoneOff} Leave</button>
+          <button class="media-btn ${state.cameraOn ? '' : 'media-btn--off'}" data-action="toggle-camera">${state.cameraOn ? ICONS.cameraOn : ICONS.cameraOff}</button>
+          <button class="media-btn ${state.muted ? 'media-btn--off' : ''}" data-action="toggle-mute">${state.muted ? ICONS.micOff : ICONS.micOn}</button>
+          <button class="media-btn" data-action="open-analytics" title="Open the live analytics screen in a new window">${ICONS.analytics}</button>
+          <button class="btn btn--danger" data-action="leave">${ICONS.phoneOff} Leave</button>
         </div>
       </div>
       <div id="toast" class="toast"></div>`;
@@ -1184,25 +1184,72 @@ function render() {
 }
 
 /* Init */
-document.addEventListener('DOMContentLoaded', () => {
+
+/**
+ * Bring the page up: theme, saved settings, invite token, signaling, listeners.
+ * Exported so the tests drive the same entry point the page does.
+ */
+export function init() {
   setTheme(getTheme());
   loadOpticalSettings();
   pendingRoomToken = parseRoomToken(window.location.hash);
   state.invited = !!pendingRoomToken; // arrived via an invite link → promote Join
   connectToSignaling(window.QVC_SIGNALING_URL || window.location.origin);
+  bindDelegates(document.getElementById('app'));
   render();
-});
+}
 
-window.handleCreateRoom = handleCreateRoom;
-window.handleJoinRoom = handleJoinRoom;
-window.handleLeave = handleLeave;
-window.toggleCamera = toggleCamera;
-window.toggleMute = toggleMute;
-window.toggleEavesdropper = toggleEavesdropper;
-window.copyJoinLink = copyJoinLink;
-window.toggleDashboard = toggleDashboard;
-window.handleSasVerify = handleSasVerify;
-window.handleSasMismatch = handleSasMismatch;
-window.toggleOptical = toggleOptical;
-window.setOpticalField = setOpticalField;
-window.openAnalytics = openAnalytics;
+/* Test surface: the internals the render tests drive. */
+export { state, render, parseRoomToken, resetSession, bindDelegates };
+export const setPendingRoomToken = (v) => {
+  pendingRoomToken = v;
+};
+export const getPendingRoomToken = () => pendingRoomToken;
+
+/* Event delegation
+ *
+ * render() replaces #app's innerHTML wholesale, so one listener per event type
+ * on the container outlives every re-render. Handlers live here rather than in
+ * markup, which is what lets script-src stay 'self'.
+ */
+const CLICK_ACTIONS = {
+  'open-analytics': openAnalytics,
+  'copy-link': copyJoinLink,
+  'create-room': handleCreateRoom,
+  'toggle-camera': toggleCamera,
+  'toggle-mute': toggleMute,
+  'sas-verify': handleSasVerify,
+  'sas-mismatch': handleSasMismatch,
+  'toggle-dashboard': toggleDashboard,
+  'toggle-eve': toggleEavesdropper,
+  leave: handleLeave,
+  'select-all': (event) => event.target.select(),
+};
+
+const INPUT_ACTIONS = {
+  'optical-url': (event) => setOpticalField('url', event.target.value),
+  'optical-token': (event) => setOpticalField('token', event.target.value),
+  'toggle-optical': (event) => toggleOptical(event.target.checked),
+};
+
+/** The nearest ancestor carrying a data-action, and that action. */
+function actionFor(event) {
+  const el = event.target.closest('[data-action]');
+  return el ? el.dataset.action : null;
+}
+
+function bindDelegates(root) {
+  root.addEventListener('click', (event) => {
+    const handler = CLICK_ACTIONS[actionFor(event)];
+    if (handler) handler(event);
+  });
+  for (const type of ['input', 'change']) {
+    root.addEventListener(type, (event) => {
+      const handler = INPUT_ACTIONS[actionFor(event)];
+      if (handler) handler(event);
+    });
+  }
+  root.addEventListener('submit', (event) => {
+    if (actionFor(event) === 'join-room') handleJoinRoom(event);
+  });
+}

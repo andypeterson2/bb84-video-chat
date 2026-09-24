@@ -100,6 +100,8 @@ class BenchConnection:
                 await self._send(wp.error("wrong_role", "eve is a source-side control"))
             else:
                 self._source.set_eavesdropper(enabled=bool(msg.get("enabled")))
+        elif kind == "qber":
+            await self._on_qber(msg)
         else:
             await self._send(wp.error("unknown", f"unknown message type {kind!r}"))
 
@@ -117,6 +119,21 @@ class BenchConnection:
             return
         report = await self._source.transmit(frame_id, bits, bases)
         await self._send(wp.frame_sent(report.frame_id, report.tx_epoch_ps))
+
+    async def _on_qber(self, msg: dict) -> None:
+        """Detector side: feed a measured QBER to the polarization search."""
+        if self._detector is None:
+            await self._send(wp.error("wrong_role", "qber is a detector-side control"))
+            return
+        try:
+            value = float(msg["value"])
+        except (KeyError, TypeError, ValueError) as exc:
+            await self._send(wp.error("bad_qber", str(exc)))
+            return
+        if not 0.0 <= value <= 1.0:
+            await self._send(wp.error("bad_qber", "value must be in [0, 1]"))
+            return
+        self._detector.report_qber(value)
 
     async def on_fiber_frame(self, raw: bytes) -> None:
         """Detector side: recover a fiber frame and push detections upstream."""

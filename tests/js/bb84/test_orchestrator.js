@@ -167,9 +167,6 @@ describe('BB84Orchestrator liveness', () => {
   });
 
   test('junk on the classical wire costs a session; the restart recovers', async () => {
-    // Generous deadline: slow frames under test load mustn't stack failures
-    // toward the exhausted latch; this test exercises the restart path.
-    globalThis.QVC_FRAME_DEADLINE_MS = 3000;
     const p = await pair();
     try {
       await p.untilMinted(1);
