@@ -8,7 +8,7 @@ Message set (⇒ browser→daemon, ⇐ daemon→browser):
   ⇒ transmit {frame_id, bits, bases, slots}   (source)  ⇐ frame-sent {frame_id, tx_epoch_ps}
   ⇒ eve {enabled}                   (source)
   ⇐ detections {frame_id, indices, bits, bases, stats}  (detector)
-  ⇐ status {stored, ...}            ⇐ error {code, detail}
+  ⇐ error {code, detail}
 
 `indices` is delta-varint+base64, `bits`/`bases` are packed+base64 — the same
 sparse encoding the browser's frame protocol uses, so a detection message
