@@ -43,6 +43,17 @@ import { DEFAULT_SLOTS_PER_FRAME } from './frame-source.js';
 
 const QBER_THRESHOLD = 0.11;
 const MAX_CONSECUTIVE_FAILURES = 3;
+/**
+ * Failure reasons that count toward the latch. The latch means no fresh key is
+ * obtainable from the channel itself, so it is driven by what the measurement
+ * says — a QBER over threshold, a frame that could not be measured, a broken
+ * integrity check. Transport trouble (a deadline, a desync) says nothing about
+ * the channel's security and restarts instead, or a slow link would paint the
+ * call red and leave it there.
+ */
+const LATCHING_REASONS = new Set(['integrity', 'qber-exceeded', 'sample-too-small']);
+/** Restart backoff grows to this multiple of the base delay. */
+const MAX_RESTART_BACKOFF = 8;
 const TARGET_KEY_BITS = 128;
 const POOL_KEY_CAP = 4;
 
@@ -193,6 +204,7 @@ export class ReservoirEngine {
     this._destroyed = false;
     this._exhausted = false;
     this._failures = 0;
+    this._transportFailures = 0;
     this._sessionN = -1;
     this._session = null; // {n, abort, router, channel}
     this._frameId = 0;
@@ -275,6 +287,7 @@ export class ReservoirEngine {
   setEavesdropper(enabled) {
     if (this._isSource) this._source.setEavesdropper(enabled);
     this._failures = 0;
+    this._transportFailures = 0;
     if (this._exhausted) {
       this._exhausted = false;
       if (this._isSource && !this._session) {
@@ -394,7 +407,6 @@ export class ReservoirEngine {
     // A session already torn down fails late; that must not end its successor.
     if (this._destroyed || this._session !== session) return;
     this._teardownSession('failure');
-    this._failures++;
     const reason =
       err instanceof DistillError || err?.name === 'ChannelAuthError'
         ? 'integrity'
@@ -404,19 +416,34 @@ export class ReservoirEngine {
             ? err.reason
             : 'error';
     this._onState({ phase: 'failed', reason, error: err });
-    if (this._failures >= MAX_CONSECUTIVE_FAILURES) {
-      // The latch stops the SOURCE from opening sessions; the detector keeps
-      // following restart announcements — that is how it recovers.
-      this._latch();
-      this._onState({ phase: 'exhausted', failures: this._failures });
+
+    if (LATCHING_REASONS.has(reason)) {
+      this._failures++;
+      if (this._failures >= MAX_CONSECUTIVE_FAILURES) {
+        // The latch stops the SOURCE from opening sessions; the detector keeps
+        // following restart announcements — that is how it recovers.
+        this._latch();
+        this._onState({ phase: 'exhausted', failures: this._failures });
+        return;
+      }
+      this._scheduleRestart(sessionRestartDelayMs());
       return;
     }
-    if (this._isSource) {
-      this._restartTimer = setTimeout(() => {
-        if (this._destroyed || this._exhausted) return;
-        this._announceSession(this._sessionN + 1);
-      }, sessionRestartDelayMs());
-    }
+
+    // Transport trouble: back off, then keep trying. A link that stays down
+    // surfaces through the peer connection's own state.
+    this._transportFailures++;
+    const backoff = Math.min(2 ** (this._transportFailures - 1), MAX_RESTART_BACKOFF);
+    this._scheduleRestart(sessionRestartDelayMs() * backoff);
+  }
+
+  /** @private open the next session after `wait` ms (source side only). */
+  _scheduleRestart(wait) {
+    if (!this._isSource) return;
+    this._restartTimer = setTimeout(() => {
+      if (this._destroyed || this._exhausted) return;
+      this._announceSession(this._sessionN + 1);
+    }, wait);
   }
 
   /* Source side */
@@ -606,6 +633,7 @@ export class ReservoirEngine {
       this._poolErrors += qber * remaining.length;
       this._acceptedFrames.push(frameId);
       this._failures = 0;
+      this._transportFailures = 0;
       this._exhausted = false;
     } else {
       this._failures++;

@@ -34,14 +34,23 @@ function enginePair({ slotsPerFrame = 2048 } = {}) {
   const installed = { source: [], detector: [] };
   const states = { source: [], detector: [] };
   const engines = {};
+  // In-memory messages are already queued when a receive runs, so its deadline
+  // never fires. `link.delay` makes receives actually wait, as a real link does.
+  const link = { delay: 0 };
 
   for (const [self, other] of [
     ['source', 'detector'],
     ['detector', 'source'],
   ]) {
-    muxes[self] = new DataChannelMux((raw) =>
-      Promise.resolve().then(() => muxes[other]?.handleMessage(raw)),
-    );
+    muxes[self] = new DataChannelMux((raw) => {
+      if (!link.delay) return Promise.resolve().then(() => muxes[other]?.handleMessage(raw));
+      return new Promise((resolve) =>
+        setTimeout(() => {
+          muxes[other]?.handleMessage(raw);
+          resolve();
+        }, link.delay),
+      );
+    });
   }
 
   const sourceFs = new LoopbackFrameSource({
@@ -69,6 +78,7 @@ function enginePair({ slotsPerFrame = 2048 } = {}) {
   return {
     engines,
     muxes,
+    link,
     installed,
     states,
     phases,
@@ -262,6 +272,38 @@ describe('reservoir failure semantics', () => {
         expect(s.keyIndex).toBe(d.keyIndex);
         expect(Array.from(s.key)).toEqual(Array.from(d.key));
       }
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('repeated frame deadlines restart the session and never latch', async () => {
+    // A blown frame deadline says nothing about the channel's security, so the
+    // engine keeps restarting however often it happens.
+    globalThis.QVC_FRAME_DEADLINE_MS = 40;
+    globalThis.QVC_SESSION_RESTART_DELAY_MS = 5;
+    const p = enginePair();
+    try {
+      p.link.delay = 120; // every receive outlives the frame deadline
+      p.start();
+      await vi.waitFor(
+        () => {
+          const timeouts = p
+            .phases('source', 'failed')
+            .filter((f) => f.reason === 'timeout' || f.reason === 'protocol');
+          expect(timeouts.length).toBeGreaterThanOrEqual(5);
+        },
+        { timeout: 10_000, interval: 25 },
+      );
+
+      // Well past MAX_CONSECUTIVE_FAILURES, and still not latched.
+      expect(p.phases('source', 'exhausted')).toHaveLength(0);
+      expect(p.engines.source._exhausted).toBe(false);
+
+      // Let the link recover and the engine still mints — no manual reset.
+      p.link.delay = 0;
+      globalThis.QVC_FRAME_DEADLINE_MS = 2000;
+      await p.untilInstalled(1);
     } finally {
       p.destroy();
     }
