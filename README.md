@@ -69,3 +69,14 @@ npm run test:e2e                          # two browser contexts through a real 
 ```
 
 Run the Python tests from the repo root, where `pytest.ini` lives. Playwright drives a simulated two-peer call and an optical call against two live bench daemons wired by the emulated fiber, including an eavesdropper latching the channel red and the recovery after it; `tests/e2e/launch.mjs` starts the daemons and the combined signaling and static server in order.
+
+## Origin and licence
+
+Written solo in 2026, after a Qualcomm Institute internship. It replaces
+`POC-Audio-Server`, a 2023-24 group project at the Institute by Aaron Kirk,
+Peter Gao, Sean Chen and me — a Python audio and video chat client that shares
+no code with this one. That history lives in the
+[original repository](https://github.com/Quantum-Interns-at-Qualcomm-Institiute/Quantum-Video-Chat);
+this one starts at the rewrite.
+
+MIT, see `LICENSE`.
