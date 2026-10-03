@@ -127,9 +127,9 @@ export function secureKeyLength({ poolLength, samples, sampleErrors, disclosed }
  * float at the threshold and then disagree about whether the mint is alive.
  */
 export function parityAllowance({ poolLength, samples, sampleErrors, target }) {
-  return secureKeyLength({ poolLength, samples, sampleErrors, disclosed: 0 }) -
-    VERIFY_HASH_BITS -
-    target;
+  return (
+    secureKeyLength({ poolLength, samples, sampleErrors, disclosed: 0 }) - VERIFY_HASH_BITS - target
+  );
 }
 
 /**
@@ -192,9 +192,7 @@ export const MAX_QBER = largestQber((qber) => asymptoticRate(qber) > 0);
  * The QBER at which half the clean-channel key rate is gone: about 3.4%. Above
  * it a link still mints, but it needs more than twice the frames to do it.
  */
-export const HALF_RATE_QBER = largestQber(
-  (qber) => asymptoticRate(qber) > asymptoticRate(0) / 2,
-);
+export const HALF_RATE_QBER = largestQber((qber) => asymptoticRate(qber) > asymptoticRate(0) / 2);
 
 /** @private truncated SHA-256 of a bit string, as base64. */
 async function verifyHash(bits) {

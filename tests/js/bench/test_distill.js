@@ -225,7 +225,11 @@ describe('distillation', () => {
 
   test('malformed or out-of-range parity queries are rejected', async () => {
     const [a, b] = ioPair();
-    const source = distillSource(Array.from(randomBits(600)), a, { mintId: 7, qber: 0.02, allowance: 600 });
+    const source = distillSource(Array.from(randomBits(600)), a, {
+      mintId: 7,
+      qber: 0.02,
+      allowance: 600,
+    });
     await b.receive(['mint-cascade']);
     await b.send({ type: 'mint-parity-query', mintId: 7, ranges: [0, 10, 5000] });
     await expect(source).rejects.toMatchObject({ reason: 'protocol' });
