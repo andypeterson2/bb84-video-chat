@@ -806,18 +806,28 @@ export function decodePeerDetections(p) {
   }
 }
 
-/** Where the mint-budget search gives up and calls a pool unmintable. */
-const MINT_BUDGET_SEARCH_LIMIT = 1e7;
+/** Pool size past which the budget display gives up and reports null. */
+const MINT_BUDGET_SEARCH_LIMIT = 1 << 22;
 
 function mintBudgetBits(poolLen, qber, samples, sampleErrors) {
-  // Bits still needed before a mint can run, or null: a pool at an error rate
-  // this Cascade cannot reconcile never becomes mintable at any size.
-  const sampleRate = samples > 0 ? sampleErrors / samples : qber;
-  for (let n = poolLen; n <= MINT_BUDGET_SEARCH_LIMIT; n++) {
-    const scaled = samples > 0 ? (samples * n) / Math.max(poolLen, 1) : 0;
-    if (mintable(n, TARGET_KEY_BITS, qber, scaled, scaled * sampleRate)) return n;
+  // Null when no pool clears the bound, which happens at error rates this
+  // Cascade cannot reconcile. Runs per frame, so it brackets then bisects.
+  const rate = samples > 0 ? sampleErrors / samples : qber;
+  const sampleAt = (n) => (samples > 0 ? (samples * n) / Math.max(poolLen, 1) : 0);
+  const fits = (n) => mintable(n, TARGET_KEY_BITS, qber, sampleAt(n), sampleAt(n) * rate);
+
+  if (fits(poolLen)) return poolLen;
+  let hi = Math.max(poolLen, 1) * 2;
+  while (hi <= MINT_BUDGET_SEARCH_LIMIT && !fits(hi)) hi *= 2;
+  if (hi > MINT_BUDGET_SEARCH_LIMIT) return null;
+
+  let lo = Math.floor(hi / 2);
+  while (lo + 1 < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (fits(mid)) hi = mid;
+    else lo = mid;
   }
-  return null;
+  return hi;
 }
 
 function requireFrame(msg, frameId) {
