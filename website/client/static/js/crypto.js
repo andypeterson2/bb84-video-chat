@@ -5,9 +5,13 @@
  * SubtleCrypto so it runs under Node too.
  *
  * Each key epoch (KID) derives an AES-GCM key and a 12-byte salt from the
- * BB84-minted secret (HKDF-SHA-256, a one-step ratchet). The per-frame nonce is
- * salt XOR a monotonic counter (CTR), and the header is bound as AES-GCM
- * additional authenticated data:
+ * BB84-minted secret and the sender's role (HKDF-SHA-256, a one-step ratchet).
+ * Both peers hold the same minted secret, so the role is what separates the two
+ * directions: without it each side derives the same key and salt and restarts
+ * its counter at zero, putting both senders' frame n under one (key, nonce).
+ * RFC 9605 4.4.1 forbids exactly that. The per-frame nonce is salt XOR a
+ * monotonic counter (CTR), and the header is bound as AES-GCM additional
+ * authenticated data:
  *
  *   frame = [ config:1 | KID? | CTR ][ ciphertext+tag ]
  *
@@ -36,7 +40,10 @@ export class EpochMissingError extends Error {
  * @param {SubtleCrypto} [subtle]
  * @returns {Promise<{key: CryptoKey, salt: Uint8Array}>}
  */
-export async function deriveEpoch(rawKey, subtle) {
+export async function deriveEpoch(rawKey, subtle, role) {
+  if (role !== 'initiator' && role !== 'responder') {
+    throw new TypeError(`deriveEpoch needs a sender role, got ${role}`);
+  }
   const s = subtle || globalThis.crypto.subtle;
   const base = await s.importKey('raw', rawKey, 'HKDF', false, ['deriveBits']);
   const hkdf = (info, bits) =>
@@ -46,8 +53,8 @@ export async function deriveEpoch(rawKey, subtle) {
       bits,
     );
   const [keyBits, saltBits] = await Promise.all([
-    hkdf('qvc-sframe-key', 128),
-    hkdf('qvc-sframe-salt', 96),
+    hkdf(`qvc-sframe-key/${role}`, 128),
+    hkdf(`qvc-sframe-salt/${role}`, 96),
   ]);
   const key = await s.importKey('raw', keyBits, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
   return { key, salt: new Uint8Array(saltBits) };

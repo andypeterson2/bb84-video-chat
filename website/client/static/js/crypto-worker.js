@@ -9,7 +9,8 @@
  * the UI's cipher-state pill (fed by the messages below) tells the user why.
  *
  * Communication with main thread:
- *   - in:  { type: 'set-key', rawKey: Uint8Array, keyIndex: number }
+ *   - in:  { type: 'set-key', rawKey: Uint8Array, keyIndex: number,
+ *            role: 'initiator'|'responder' }
  *   - out: { type: 'cipher-state', state: 'keyless'|'encrypting', keyIndex? }
  *   - out: { type: 'metrics', ...aggregated counters, at most one per second }
  *   - out: { type: 'decrypt-error', failures } (debounced, at most one per second)
@@ -19,11 +20,11 @@
 // ring, the send counter, and the fail-closed policy.
 import { deriveEpoch, sealFrame, openFrame } from './crypto.js';
 
-// Current epoch plus its predecessor, picked per frame by the header's KID: the
-// sides never re-key on the same frame, so one slot would fail auth mid-re-key.
+// The peer's current epoch and its predecessor, picked per frame by the
+// header's KID, because the sides never re-key on the same frame.
 const KEY_RING_SIZE = 2;
 const keyRing = new Map(); // KID -> { key: CryptoKey, salt: Uint8Array(12) }
-let currentEpoch = null; // { key, salt } for currentKeyIndex
+let sendEpoch = null; // this sender's { key, salt } for currentKeyIndex
 let currentKeyIndex = 0;
 let sendCtr = 0; // per-epoch monotonic frame counter (reset on each new epoch)
 let announcedKeyless = false;
@@ -83,13 +84,13 @@ function dropKeyless() {
  * header bound as AES-GCM additional authenticated data.
  */
 async function encryptFrame(frame, controller) {
-  if (!currentEpoch) {
+  if (!sendEpoch) {
     dropKeyless();
     return; // fail closed: no key, no frame
   }
 
   const t0 = performance.now();
-  frame.data = await sealFrame(frame.data, currentEpoch, {
+  frame.data = await sealFrame(frame.data, sendEpoch, {
     kid: currentKeyIndex,
     ctr: sendCtr++,
     isKey: frame.type === 'key',
@@ -135,15 +136,20 @@ async function decryptFrame(frame, controller) {
 /* Message handler (key updates from main thread) */
 
 self.onmessage = async (event) => {
-  const { type, rawKey, keyIndex } = event.data;
+  const { type, rawKey, keyIndex, role } = event.data;
   if (type === 'set-key') {
-    const epoch = await deriveEpoch(rawKey);
-    currentEpoch = epoch;
+    // One minted secret, two epochs: seal under this role, open under the peer's.
+    const peerRole = role === 'initiator' ? 'responder' : 'initiator';
+    const [mine, theirs] = await Promise.all([
+      deriveEpoch(rawKey, undefined, role),
+      deriveEpoch(rawKey, undefined, peerRole),
+    ]);
+    sendEpoch = mine;
     currentKeyIndex = keyIndex;
-    // Fresh counter space for the new epoch: its salt is independent, so a CTR
-    // restarting at 0 still keeps every (key, salt, CTR) triple unique.
+    // The salt is independent of every other epoch's and of the peer's, so a
+    // counter restarting here still keeps every (key, salt, CTR) triple unique.
     sendCtr = 0;
-    keyRing.set(keyIndex, epoch);
+    keyRing.set(keyIndex, theirs);
     // Keep only the newest KEY_RING_SIZE epochs (Map preserves insert order).
     for (const idx of keyRing.keys()) {
       if (keyRing.size <= KEY_RING_SIZE) break;

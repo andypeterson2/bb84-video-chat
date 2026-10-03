@@ -49,8 +49,8 @@ describe('SFrame header codec', () => {
 
 describe('epoch derivation', () => {
   test('is deterministic: same secret ⇒ same salt and interoperable key', async () => {
-    const a = await deriveEpoch(rawKey, subtle);
-    const b = await deriveEpoch(rawKey, subtle);
+    const a = await deriveEpoch(rawKey, subtle, 'initiator');
+    const b = await deriveEpoch(rawKey, subtle, 'initiator');
     expect(a.salt).toEqual(b.salt);
     // Sealed under a, opened under b (same derived key) ⇒ same key material.
     const data = new Uint8Array([9, 8, 7]).buffer;
@@ -60,8 +60,8 @@ describe('epoch derivation', () => {
   });
 
   test('a different secret derives a different, non-interoperable epoch', async () => {
-    const a = await deriveEpoch(rawKey, subtle);
-    const other = await deriveEpoch(new Uint8Array(16).fill(0xff), subtle);
+    const a = await deriveEpoch(rawKey, subtle, 'initiator');
+    const other = await deriveEpoch(new Uint8Array(16).fill(0xff), subtle, 'initiator');
     expect(a.salt).not.toEqual(other.salt);
     const sealed = await sealFrame(
       new Uint8Array([1]).buffer,
@@ -71,12 +71,33 @@ describe('epoch derivation', () => {
     );
     await expect(openFrame(sealed, () => other, subtle)).rejects.toThrow();
   });
+
+  test('the two directions never share a (key, nonce)', async () => {
+    // RFC 9605 4.4.1: one base_key must not encrypt for multiple senders, and
+    // both peers hold the same secret and start at CTR 0.
+    const initiator = await deriveEpoch(rawKey, subtle, 'initiator');
+    const responder = await deriveEpoch(rawKey, subtle, 'responder');
+    expect(initiator.salt).not.toEqual(responder.salt);
+
+    // Same plaintext, same counter, opposite directions: identical ciphertext
+    // would mean one keystream covering both, which is the bug this guards.
+    const data = new Uint8Array([4, 2]).buffer;
+    const header = { kid: 0, ctr: 0, isKey: false };
+    const fromInitiator = await sealFrame(data, initiator, header, subtle);
+    const fromResponder = await sealFrame(data, responder, header, subtle);
+    expect(new Uint8Array(fromInitiator)).not.toEqual(new Uint8Array(fromResponder));
+  });
+
+  test('a sender role is required, so a caller cannot silently collide', async () => {
+    await expect(deriveEpoch(rawKey, subtle)).rejects.toThrow(/sender role/);
+    await expect(deriveEpoch(rawKey, subtle, 'both')).rejects.toThrow(/sender role/);
+  });
 });
 
 describe('seal / open', () => {
   let epoch;
   beforeAll(async () => {
-    epoch = await deriveEpoch(rawKey, subtle);
+    epoch = await deriveEpoch(rawKey, subtle, 'initiator');
   });
 
   test('round-trip preserves the frame', async () => {
@@ -151,8 +172,8 @@ describe('seal / open', () => {
   });
 
   test('rotation: two epochs coexist and open by their KID', async () => {
-    const epochA = await deriveEpoch(new Uint8Array(16).fill(1), subtle);
-    const epochB = await deriveEpoch(new Uint8Array(16).fill(2), subtle);
+    const epochA = await deriveEpoch(new Uint8Array(16).fill(1), subtle, 'initiator');
+    const epochB = await deriveEpoch(new Uint8Array(16).fill(2), subtle, 'initiator');
     const ring = new Map([
       [0, epochA],
       [1, epochB],

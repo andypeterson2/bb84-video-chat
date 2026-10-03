@@ -214,7 +214,10 @@ export class WebRTCManager {
     // set-key would flip the UI to "encrypted" while media flows in the clear.
     if (this._transformsUnsupported) return;
     if (this._encryptWorker) {
-      this._encryptWorker.postMessage({ type: 'set-key', rawKey, keyIndex });
+      // The role separates the two directions' key schedules: both sides hold
+      // the same minted secret, so without it they seal under one (key, nonce).
+      const role = this._isInitiator ? 'initiator' : 'responder';
+      this._encryptWorker.postMessage({ type: 'set-key', rawKey, keyIndex, role });
     }
   }
 
