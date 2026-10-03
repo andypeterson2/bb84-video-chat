@@ -147,6 +147,55 @@ export function mintable(poolLength, target, qber = DEFAULT_QBER, samples = 0, s
   return length >= target;
 }
 
+/**
+ * @private Key fraction a pool of unbounded size yields at `qber`: one bit per
+ * pooled bit, less what the errors tell Eve and what reconciliation discloses.
+ * The finite-key penalty vanishes in this limit, so this is the best case.
+ */
+function asymptoticRate(qber) {
+  const n = 1 << 20;
+  return 1 - binaryEntropy(qber) - leakage(n, qber) / n;
+}
+
+/** @private The largest qber for which `holds` is still true. */
+function largestQber(holds) {
+  let lo = 0;
+  let hi = 0.5;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    if (holds(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * The QBER above which no pool of any size yields key here: about 7.3%.
+ *
+ * The textbook BB84 figure is 11%, where the Shor-Preskill rate 1 - 2h(Q)
+ * reaches zero. That rate charges one h(Q) for reconciliation, which is the
+ * Shannon bound and assumes an error-correcting code that reaches it. Cascade
+ * does not: at the block sizing above, its parities and bisections disclose
+ * about 1.65 times h(Q), so the budget 1 - h(Q) - leakage(n, Q)/n closes
+ * earlier. 11% is the limit of the protocol; this is the limit of this
+ * implementation of it, and the gate has to be the second one.
+ *
+ * Computed from `leakage` rather than written down, so it follows the sizing.
+ * It is also the unbounded-pool limit: at the sample sizes the frame engine
+ * produces the ceiling is nearer 7.2%, and the pool a mint needs grows from a
+ * few thousand bits on a clean channel to millions at 7%. So this bounds what
+ * is reachable and `mintable` decides each pool.
+ */
+export const MAX_QBER = largestQber((qber) => asymptoticRate(qber) > 0);
+
+/**
+ * The QBER at which half the clean-channel key rate is gone: about 3.4%. Above
+ * it a link still mints, but it needs more than twice the frames to do it.
+ */
+export const HALF_RATE_QBER = largestQber(
+  (qber) => asymptoticRate(qber) > asymptoticRate(0) / 2,
+);
+
 /** @private truncated SHA-256 of a bit string, as base64. */
 async function verifyHash(bits) {
   const digest = await crypto.subtle.digest('SHA-256', packBits(bits));

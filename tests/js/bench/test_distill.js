@@ -14,6 +14,9 @@ import {
   DistillError,
   CASCADE_PASSES,
   VERIFY_HASH_BITS,
+  MAX_QBER,
+  HALF_RATE_QBER,
+  binaryEntropy,
 } from '../../../website/client/static/js/bench/distill.js';
 import { randomBits, packBits, toB64 } from '../../../website/client/static/js/bench/packing.js';
 
@@ -66,6 +69,31 @@ describe('mint budget accounting', () => {
     // 4487 bits with an 896-bit sample is seven of the simulator's frames.
     expect(mintable(4487, 128, 0.02, 896, 0.02 * 896)).toBe(true);
     expect(mintable(600, 128, 0.11, 120, 0.11 * 120)).toBe(false);
+  });
+
+  test('the ceiling sits where this reconciliation runs out, not at the textbook 11%', () => {
+    // 1 - 2h(Q) reaches zero at 11%, which charges error correction the Shannon
+    // bound. Cascade discloses more than the bound, so the budget closes sooner.
+    const shorPreskill = 0.11;
+    expect(binaryEntropy(shorPreskill)).toBeCloseTo(0.5, 2);
+    expect(MAX_QBER).toBeLessThan(shorPreskill);
+    expect(MAX_QBER).toBeGreaterThan(0.072);
+    expect(MAX_QBER).toBeLessThan(0.074);
+    expect(HALF_RATE_QBER).toBeGreaterThan(0.033);
+    expect(HALF_RATE_QBER).toBeLessThan(0.035);
+  });
+
+  test('no pool of any size mints above the ceiling', () => {
+    const sampled = (n, qber) => {
+      const k = Math.round(n / 5);
+      return mintable(n, 128, qber, k, Math.round(k * qber));
+    };
+    for (let n = 1024; n <= 1 << 23; n *= 2) {
+      expect(sampled(n, MAX_QBER + 0.002)).toBe(false);
+      expect(sampled(n, 0.11)).toBe(false);
+    }
+    // Just under it a pool still mints, given enough of one.
+    expect(sampled(1 << 23, MAX_QBER - 0.004)).toBe(true);
   });
 
   test('mintable only when the pool covers target plus expected disclosure', () => {

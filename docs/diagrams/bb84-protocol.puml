@@ -32,18 +32,18 @@ note over A, B : ~50% of detected bits survive sifting
 
 == Step 3: QBER Estimation ==
 
-A -> CC : Reveal 10% sample of sifted bits
+A -> CC : Reveal 25% sample of sifted bits\n(capped at 128 per frame)
 CC -> B :
 B -> B : Compare with own bits\nCount mismatches
 B -> CC : Report QBER
 
-alt QBER > 11% (Eavesdropper Detected)
+alt QBER > 7.3% (Frame Rejected)
     B -> CC : **ABORT** — key compromised
     CC -> A :
     A -> A : Discard key material
     B -> B : Discard key material
     note over A, B $RED : Restart protocol\nwith new random bits
-else QBER < 11% (Secure)
+else QBER < 7.3% (Within the Key Budget)
     note over A, B $GREEN : Channel is secure\nProceed to error correction
 end
 

@@ -11,6 +11,7 @@
 import { BB84Orchestrator } from '../../../website/client/static/js/bb84/orchestrator.js';
 import { WebRTCManager } from '../../../website/client/static/js/webrtc.js';
 import { orchestratorPair, USED_METHODS, fastTimers, clearTimers } from './harness.js';
+import { MAX_QBER } from '../../../website/client/static/js/bench/distill.js';
 
 async function pair(options = {}) {
   const p = orchestratorPair(options);
@@ -45,7 +46,7 @@ describe('BB84Orchestrator key production', () => {
       expect(Array.from(p.installed.alice[0].key)).toEqual(Array.from(p.installed.bob[0].key));
       // Reservoir telemetry surfaced healthy frames.
       const frame = p.phases('alice', 'reservoir').at(-1);
-      expect(frame.qber).toBeLessThan(0.11);
+      expect(frame.qber).toBeLessThan(MAX_QBER);
       expect(frame.accepted).toBe(true);
     } finally {
       p.destroy();
@@ -65,7 +66,7 @@ describe('BB84Orchestrator key production', () => {
     }
   });
 
-  test('an eavesdropper drives per-frame QBER past 11% and no key is installed', async () => {
+  test('an eavesdropper drives per-frame QBER past the ceiling and no key is installed', async () => {
     const p = await pair();
     try {
       p.alice.setEavesdropper(true);

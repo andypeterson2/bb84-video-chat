@@ -12,6 +12,8 @@
  * call data); the particles illustrate motion and carry no metrics.
  */
 
+import { MAX_QBER } from '../bench/distill.js';
+
 /** Ordered stages of the pipeline, left → right. */
 export const STAGES = [
   { key: 'source', label: 'Source' },
@@ -62,7 +64,7 @@ export function pipelineModel(snapshot, now = Date.now()) {
   const s = snapshot || {};
   const active = !!s.inCall && !!s.bb84Active;
   const qber = typeof s.qber === 'number' ? s.qber : null;
-  const threshold = s.qberThreshold ?? 0.11;
+  const threshold = s.qberThreshold ?? MAX_QBER;
   const warning = s.qberWarning ?? 0.08;
   const overThreshold = qber != null && qber > threshold;
   const overWarning = qber != null && qber > warning;

@@ -38,10 +38,16 @@ import {
   estimateQber,
   MIN_SAMPLE_SIZE,
 } from './sift.js';
-import { distillSource, distillDetector, mintable, DistillError, DEFAULT_QBER } from './distill.js';
+import {
+  distillSource,
+  distillDetector,
+  mintable,
+  DistillError,
+  DEFAULT_QBER,
+  MAX_QBER,
+} from './distill.js';
 import { DEFAULT_SLOTS_PER_FRAME } from './frame-source.js';
 
-const QBER_THRESHOLD = 0.11;
 const MAX_CONSECUTIVE_FAILURES = 3;
 /**
  * Failure reasons that count toward the latch. The latch means no fresh key is
@@ -624,7 +630,7 @@ export class ReservoirEngine {
     // An empty sample estimates QBER as 0, so a frame disclosing too few bits
     // does not count as measured. Both sides derive `sampled` identically.
     const measured = sampled >= MIN_SAMPLE_SIZE;
-    const accept = measured && qber <= QBER_THRESHOLD;
+    const accept = measured && qber <= MAX_QBER;
     // The detector's bench steers its optics from this measurement, so only a
     // frame that measured one is worth reporting.
     if (measured) this._source.reportQber?.(qber);
