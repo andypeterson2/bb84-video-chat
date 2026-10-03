@@ -2,7 +2,9 @@
 
 Peer-to-peer video chat where the frame-encryption key comes from a BB84 exchange run over the WebRTC data channel. Video and audio flow directly between browsers; the signaling server only relays SDP and ICE. This is a research demonstration, not a production QKD system — there are no real photons in the default mode, and the optical mode emulates the instruments rather than driving them.
 
-The quantum channel models Poissonian photon statistics, fiber attenuation, single-photon APD detectors and intercept-resend eavesdropping. When the quantum bit error rate passes the 11% security threshold the key is rejected and re-exchanged.
+The quantum channel models Poissonian photon statistics, fiber attenuation, single-photon APD detectors with dark counts, polarization misalignment and intercept-resend eavesdropping. An undisturbed link therefore runs at about 1.5% QBER rather than zero, and an intercept-resend eavesdropper puts it near 25%.
+
+When the quantum bit error rate passes 7.3% the frame is rejected. That is not the textbook BB84 number: 11% is where the Shor-Preskill rate `1 - 2h(Q)` reaches zero, and it charges error correction the Shannon bound. Cascade does not reach the bound — at the block sizing here it discloses about 1.65 times `h(Q)` — so the budget `1 - h(Q) - leakage/n` closes at 7.3% instead. The gate uses the figure this implementation can actually mint at, computed from the leakage model rather than written down, and above it no pool of any size yields a key. Below it the pool a mint needs grows steeply: a few thousand bits on a clean channel, tens of thousands at 5%, millions at 7%.
 
 ```
 Browser A ◄══ WebRTC (P2P encrypted media) ══► Browser B

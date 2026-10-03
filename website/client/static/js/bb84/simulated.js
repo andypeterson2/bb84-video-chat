@@ -2,7 +2,13 @@
  * SimulatedQuantumChannel — models a physical quantum optical channel.
  *
  * Implements photon source (Poisson), fiber attenuation, single-photon
- * detector (APD), and optional eavesdropper.
+ * detector (APD) with dark counts, polarization misalignment, and an optional
+ * eavesdropper.
+ *
+ * The misalignment term is what makes an undisturbed run's QBER non-zero. A
+ * channel with no error rate is not a channel: it skips the error correction
+ * and the privacy amplification that the error rate pays for, so the key the
+ * simulator produces would come from a path no physical link takes.
  */
 
 export class SimulatedQuantumChannel {
@@ -12,12 +18,20 @@ export class SimulatedQuantumChannel {
    * @param {number} options.sourceIntensity - mean photon number per pulse (default 0.1)
    * @param {number} options.detectorEfficiency - APD detection efficiency (default 0.10)
    * @param {boolean} options.eavesdropperEnabled - whether Eve intercepts (default false)
+   * @param {number} options.misalignmentError - chance a detected photon reads
+   *   in the wrong polarization, the link's optical visibility error. 1.5% is
+   *   the middle of what short-fiber BB84 benches report (default 0.015)
+   * @param {number} options.darkCountRate - chance per slot that the APD fires
+   *   with no photon present. 1e-5 is a 1 kHz dark rate in a 10 ns gate, so it
+   *   is real but far below the misalignment term here (default 1e-5)
    */
   constructor(options = {}) {
     this._fiberLengthKm = options.fiberLengthKm ?? 1.0;
     this._sourceIntensity = options.sourceIntensity ?? 0.1;
     this._detectorEfficiency = options.detectorEfficiency ?? 0.1;
     this._eavesdropperEnabled = options.eavesdropperEnabled ?? false;
+    this._misalignmentError = options.misalignmentError ?? 0.015;
+    this._darkCountRate = options.darkCountRate ?? 1e-5;
 
     // Fiber attenuation: ~0.2 dB/km for standard telecom fiber
     this._attenuationDbPerKm = 0.2;
@@ -37,6 +51,8 @@ export class SimulatedQuantumChannel {
       sourceIntensity: this._sourceIntensity,
       detectorEfficiency: this._detectorEfficiency,
       eavesdropperEnabled: this._eavesdropperEnabled,
+      misalignmentError: this._misalignmentError,
+      darkCountRate: this._darkCountRate,
     });
     receiver._isReceiver = true;
     this._peer = receiver;
@@ -82,45 +98,52 @@ export class SimulatedQuantumChannel {
     });
   }
 
+  /** @private Whether a prepared photon survives the link and fires the APD. */
+  _photonArrives() {
+    const photonProb = 1 - Math.exp(-this._sourceIntensity);
+    const attenuationDb = this._attenuationDbPerKm * this._fiberLengthKm;
+    const transmittance = Math.pow(10, -attenuationDb / 10);
+    return (
+      Math.random() <= photonProb &&
+      Math.random() <= transmittance &&
+      Math.random() <= this._detectorEfficiency
+    );
+  }
+
   /**
-   * Simulate transmission of a single qubit through the channel.
-   * Models: Poisson source, fiber attenuation, eavesdropper, APD detection.
+   * @private Eve's intercept-resend. She measures in a random basis and resends
+   * in that one, so a wrong guess randomizes what the receiver then measures.
+   */
+  _intercept(bit, basis) {
+    const eveBasis = Math.random() < 0.5 ? 0 : 1;
+    if (eveBasis === basis) return bit;
+    return Math.random() < 0.5 ? bit ^ 1 : bit;
+  }
+
+  /**
+   * Simulate transmission of a single qubit through the channel: Poisson
+   * source, fiber attenuation, APD efficiency and dark counts, the optional
+   * eavesdropper, and polarization misalignment.
    * @private
    */
   _simulateTransmission(qubit) {
-    let { bit, basis } = qubit;
+    const { basis } = qubit;
 
-    // Step 1: Poisson photon source — probability of at least one photon
-    const photonProb = 1 - Math.exp(-this._sourceIntensity);
-    if (Math.random() > photonProb) {
-      return { bit: 0, basis, detected: false };
-    }
-
-    // Step 2: Fiber attenuation
-    const attenuationDb = this._attenuationDbPerKm * this._fiberLengthKm;
-    const transmittance = Math.pow(10, -attenuationDb / 10);
-    if (Math.random() > transmittance) {
-      return { bit: 0, basis, detected: false };
-    }
-
-    // Step 3: Eavesdropper (intercept-resend attack)
-    if (this._eavesdropperEnabled) {
-      // Eve measures in random basis
-      const eveBasis = Math.random() < 0.5 ? 0 : 1;
-      if (eveBasis !== basis) {
-        // Wrong basis measurement — 50% chance of flipping the bit
-        if (Math.random() < 0.5) {
-          bit = bit ^ 1;
-        }
+    // A slot no photon reached still fires sometimes. The click is thermal, so
+    // its bit carries nothing about what was prepared: half of the dark counts
+    // that survive sifting are errors.
+    if (!this._photonArrives()) {
+      if (Math.random() < this._darkCountRate) {
+        return { bit: Math.random() < 0.5 ? 0 : 1, basis, detected: true };
       }
-      // Eve resends in her basis (which may differ from Alice's)
-      // This effectively randomizes the basis for half the qubits
-    }
-
-    // Step 4: Detector efficiency
-    if (Math.random() > this._detectorEfficiency) {
       return { bit: 0, basis, detected: false };
     }
+
+    let bit = this._eavesdropperEnabled ? this._intercept(qubit.bit, basis) : qubit.bit;
+
+    // Misaligned polarization frames, so a share of right-basis photons read
+    // wrong. The whole error rate on a short undisturbed fiber.
+    if (Math.random() < this._misalignmentError) bit ^= 1;
 
     return { bit, basis, detected: true };
   }

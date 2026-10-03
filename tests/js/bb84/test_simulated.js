@@ -1,4 +1,5 @@
 import { SimulatedQuantumChannel } from '../../../website/client/static/js/bb84/simulated.js';
+import { MAX_QBER } from '../../../website/client/static/js/bench/distill.js';
 
 function generateQubits(n) {
   return Array.from({ length: n }, () => ({
@@ -22,7 +23,7 @@ function computeQber(sent, received) {
 }
 
 describe('SimulatedQuantumChannel', () => {
-  test('without eavesdropper, QBER stays below 5%', async () => {
+  test('without eavesdropper, QBER sits at the misalignment floor', async () => {
     const qbers = [];
     for (let round = 0; round < 10; round++) {
       const aliceCh = new SimulatedQuantumChannel({
@@ -41,10 +42,15 @@ describe('SimulatedQuantumChannel', () => {
     }
 
     const avgQber = qbers.reduce((a, b) => a + b, 0) / qbers.length;
-    expect(avgQber).toBeLessThan(0.05);
+    // Misalignment is 1.5% by default, and a quiet channel has to show it: a
+    // zero-error channel would skip the correction the error rate pays for.
+    expect(avgQber).toBeGreaterThan(0.005);
+    expect(avgQber).toBeLessThan(0.03);
+    // Still well inside what the distillation can mint from.
+    expect(avgQber).toBeLessThan(MAX_QBER);
   });
 
-  test('with eavesdropper, QBER exceeds 11%', async () => {
+  test('with eavesdropper, QBER lands far above the mint ceiling', async () => {
     const qbers = [];
     for (let round = 0; round < 10; round++) {
       const aliceCh = new SimulatedQuantumChannel({
@@ -63,7 +69,9 @@ describe('SimulatedQuantumChannel', () => {
     }
 
     const avgQber = qbers.reduce((a, b) => a + b, 0) / qbers.length;
-    expect(avgQber).toBeGreaterThan(0.11);
+    // Intercept-resend costs a quarter of the sifted bits, so the margin over
+    // the ceiling is wide enough that one frame's sample decides.
+    expect(avgQber).toBeGreaterThan(0.2);
   });
 
   test('detection rate is approximately sourceIntensity * detectorEfficiency', async () => {
