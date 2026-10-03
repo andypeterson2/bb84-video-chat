@@ -13,6 +13,7 @@ import {
   encodePeerDetections,
 } from '../../../website/client/static/js/bench/reservoir.js';
 import { LoopbackFrameSource } from '../../../website/client/static/js/bench/loopback-source.js';
+import { MAX_QBER } from '../../../website/client/static/js/bench/distill.js';
 
 beforeEach(() => {
   // Real-time defaults are for humans; tests run the same machinery fast.
@@ -118,10 +119,14 @@ describe('reservoir streaming', () => {
         );
       }
       // Telemetry carried frame events with sane shapes.
-      const frame = p.phases('source', 'frame').at(-1);
-      expect(frame.qber).toBeLessThan(0.11);
+      const frames = p.phases('source', 'frame');
+      const frame = frames.at(-1);
+      expect(frame.qber).toBeLessThan(MAX_QBER);
       expect(frame.accepted).toBe(true);
       expect(frame.pooledBits).toBeGreaterThanOrEqual(0);
+      // The bench has a misalignment floor, so some frame in a mint's worth of
+      // them carries errors: these keys paid h(Q) to privacy amplification.
+      expect(frames.some((f) => f.qber > 0)).toBe(true);
     } finally {
       p.destroy();
     }
@@ -221,7 +226,7 @@ describe('reservoir failure semantics', () => {
         const failed = p.phases('source', 'failed');
         expect(failed.length).toBeGreaterThanOrEqual(3);
         for (const f of failed) expect(f.reason).toBe('qber-exceeded');
-        expect(failed.at(-1).qber ?? failed[0].qber).toBeGreaterThan(0.11);
+        expect(failed.at(-1).qber ?? failed[0].qber).toBeGreaterThan(MAX_QBER);
 
         // Toggle off at the source; the detector follows the announced session
         // restart, the latch clears and keys mint again.

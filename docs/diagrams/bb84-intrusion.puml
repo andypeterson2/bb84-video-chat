@@ -27,15 +27,15 @@ note over E $RED : When Eve's basis ≠ Alice's basis:\nBob gets random bit → 
 
 == QBER Rises ==
 
-B -> M : Report QBER: 0.08
+B -> M : Report QBER: 0.05
 M -> M : Classify: **WARNING**
 M -> V : Emit warning event\n(yellow indicator)
 
-B -> M : Report QBER: 0.15
-M -> M : Classify: **WARNING**
+B -> M : Report QBER: 0.09
+M -[#DC2626]> M : Classify: **FRAME REJECTED**\nQBER (9%) > ceiling (7.3%)
 
 B -> M : Report QBER: 0.24
-M -[#DC2626]> M : Classify: **INTRUSION DETECTED**\nQBER (24%) > threshold (11%)
+M -[#DC2626]> M : Classify: **INTRUSION DETECTED**\nQBER (24%) > ceiling (7.3%)
 
 == Key Rejection ==
 
@@ -54,7 +54,7 @@ A -> B : Retry key exchange\n(0.5s retry interval)
 alt Eve Still Present
     A -[#DC2626]> E : Photon intercepted again
     E -[#DC2626]> B : Re-sent
-    B -> M : QBER still > 11%
+    B -> M : QBER still > 7.3%
     M -> M : **ABORT** again
     note over M : Consecutive failures logged\nIntrusion count incremented
 else Eve Removed / Stops

@@ -11,6 +11,7 @@
  * present), so importing the module under test has no side effects.
  */
 
+import { MAX_QBER } from '../bench/distill.js';
 import { TELEMETRY_CHANNEL, EVENT_KINDS } from './telemetry.js';
 import { pipelineModel, createPipeline } from './pipeline.js';
 
@@ -208,7 +209,7 @@ function qberPanel(s) {
         <div class="an-qber-verdict an-tone-${v.tone}">${v.label}</div>
       </div>
       <canvas class="an-chart" data-chart="qber"></canvas>
-      <div class="an-sub">Abort threshold ${s.qberThreshold != null ? (s.qberThreshold * 100).toFixed(0) + '%' : '—'} · intercept-resend lands near 25%</div>
+      <div class="an-sub">Abort threshold ${s.qberThreshold != null ? (s.qberThreshold * 100).toFixed(1) + '%' : '—'} · intercept-resend lands near 25%</div>
     </section>`;
 }
 
@@ -310,7 +311,7 @@ export function eveCalloutMarkup(s) {
   const over = typeof s.qber === 'number' && s.qberThreshold != null && s.qber > s.qberThreshold;
   const who = s.peerEavesdropping && !s.eavesdropping ? 'Your partner enabled' : 'You enabled';
   const tail = over
-    ? ` — QBER is ${(s.qber * 100).toFixed(1)}%, past the ${((s.qberThreshold ?? 0.11) * 100).toFixed(0)}% abort line, so the QBER gate closed and no compromised key was minted.`
+    ? ` — QBER is ${(s.qber * 100).toFixed(1)}%, past the ${((s.qberThreshold ?? MAX_QBER) * 100).toFixed(1)}% abort line, so the QBER gate closed and no compromised key was minted.`
     : '. Watch the QBER climb toward the abort line.';
   return `
     <div class="an-callout ${over ? 'an-callout-alarm' : ''}" role="status">

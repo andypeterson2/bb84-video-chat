@@ -54,7 +54,9 @@ end note
 
 note bottom of Engine
   Continuous stream, not rounds:
-  • gate each frame at QBER 0.11
+  • gate each frame at QBER 0.073
+    (what this Cascade can mint at,
+     not the textbook 0.11)
   • pool accepted bits
   • mint when pool ≥ key + leakage
   • 3 consecutive failures ⇒ latch

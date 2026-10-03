@@ -38,10 +38,16 @@ import {
   estimateQber,
   MIN_SAMPLE_SIZE,
 } from './sift.js';
-import { distillSource, distillDetector, mintable, DistillError, DEFAULT_QBER } from './distill.js';
+import {
+  distillSource,
+  distillDetector,
+  mintable,
+  DistillError,
+  DEFAULT_QBER,
+  MAX_QBER,
+} from './distill.js';
 import { DEFAULT_SLOTS_PER_FRAME } from './frame-source.js';
 
-const QBER_THRESHOLD = 0.11;
 const MAX_CONSECUTIVE_FAILURES = 3;
 /**
  * Failure reasons that count toward the latch. The latch means no fresh key is
@@ -212,6 +218,8 @@ export class ReservoirEngine {
     this._keyIndex = 0;
     this._pool = [];
     this._poolErrors = 0;
+    this._poolSamples = 0;
+    this._poolSampleErrors = 0;
     this._acceptedFrames = [];
     this._mintRunning = false;
     this._pendingKeys = [];
@@ -386,6 +394,8 @@ export class ReservoirEngine {
     // Bits accumulated in a dead session cannot align with a fresh one.
     this._pool = [];
     this._poolErrors = 0;
+    this._poolSamples = 0;
+    this._poolSampleErrors = 0;
     this._acceptedFrames = [];
     this._mintRunning = false;
     for (const [, w] of this._detectionWaiters) w.reject(new MuxAbortError('session down', reason));
@@ -620,7 +630,7 @@ export class ReservoirEngine {
     // An empty sample estimates QBER as 0, so a frame disclosing too few bits
     // does not count as measured. Both sides derive `sampled` identically.
     const measured = sampled >= MIN_SAMPLE_SIZE;
-    const accept = measured && qber <= QBER_THRESHOLD;
+    const accept = measured && qber <= MAX_QBER;
     // The detector's bench steers its optics from this measurement, so only a
     // frame that measured one is worth reporting.
     if (measured) this._source.reportQber?.(qber);
@@ -631,6 +641,10 @@ export class ReservoirEngine {
     if (accepted) {
       this._pool.push(...remaining);
       this._poolErrors += qber * remaining.length;
+      // The theorem bounds Eve from the sample, so the sample's own size and
+      // error count are what carry forward -- not the bit-weighted rate above.
+      this._poolSamples += sampled;
+      this._poolSampleErrors += qber * sampled;
       this._acceptedFrames.push(frameId);
       this._failures = 0;
       this._transportFailures = 0;
@@ -654,7 +668,12 @@ export class ReservoirEngine {
       qber,
       accepted,
       pooledBits: this._pool.length,
-      mintBudget: mintBudgetBits(this._pool.length, this._poolQber()),
+      mintBudget: mintBudgetBits(
+        this._pool.length,
+        this._poolQber(),
+        this._poolSamples,
+        this._poolSampleErrors,
+      ),
       ...stats,
     });
   }
@@ -668,7 +687,16 @@ export class ReservoirEngine {
 
   _maybeMint(session) {
     if (this._mintRunning || this._session !== session) return;
-    if (!mintable(this._pool.length, TARGET_KEY_BITS, this._poolQber())) return;
+    if (
+      !mintable(
+        this._pool.length,
+        TARGET_KEY_BITS,
+        this._poolQber(),
+        this._poolSamples,
+        this._poolSampleErrors,
+      )
+    )
+      return;
     if (this._pendingKeys.length >= POOL_KEY_CAP) return;
     this._mintRunning = true;
     this._runMint(session)
@@ -684,7 +712,11 @@ export class ReservoirEngine {
     const mintId = this._mintId++;
     const qber = this._poolQber();
     const pool = this._pool.splice(0);
+    const samples = this._poolSamples;
+    const sampleErrors = this._poolSampleErrors;
     this._poolErrors = 0;
+    this._poolSamples = 0;
+    this._poolSampleErrors = 0;
     const frameIds = this._acceptedFrames.splice(0);
     const io = {
       send: (msg) => session.channel.send(msg),
@@ -692,13 +724,26 @@ export class ReservoirEngine {
     };
     let key;
     if (this._isSource) {
-      await io.send({ type: 'mint-begin', mintId, frameIds, poolLen: pool.length });
-      key = await distillSource(pool, io, { mintId, target: TARGET_KEY_BITS, qber });
+      await io.send({
+        type: 'mint-begin',
+        mintId,
+        frameIds,
+        poolLen: pool.length,
+        samples,
+      });
+      key = await distillSource(pool, io, {
+        mintId,
+        target: TARGET_KEY_BITS,
+        qber,
+        samples,
+        sampleErrors,
+      });
     } else {
       const begin = await io.receive(['mint-begin']);
       if (
         begin.mintId !== mintId ||
         begin.poolLen !== pool.length ||
+        begin.samples !== samples ||
         !sameFrameIds(begin.frameIds, frameIds)
       ) {
         throw new DistillError('mint pool divergence (accepted frame sets differ)', 'divergence');
@@ -767,12 +812,28 @@ export function decodePeerDetections(p) {
   }
 }
 
-function mintBudgetBits(poolLen, qber) {
-  // Display value: bits still needed before a mint can run. QBER is bounded by
-  // the acceptance threshold, so a pool always becomes mintable.
-  let n = poolLen;
-  while (!mintable(n, TARGET_KEY_BITS, qber)) n++;
-  return n;
+/** Pool size past which the budget display gives up and reports null. */
+const MINT_BUDGET_SEARCH_LIMIT = 1 << 22;
+
+function mintBudgetBits(poolLen, qber, samples, sampleErrors) {
+  // Null when no pool clears the bound, which happens at error rates this
+  // Cascade cannot reconcile. Runs per frame, so it brackets then bisects.
+  const rate = samples > 0 ? sampleErrors / samples : qber;
+  const sampleAt = (n) => (samples > 0 ? (samples * n) / Math.max(poolLen, 1) : 0);
+  const fits = (n) => mintable(n, TARGET_KEY_BITS, qber, sampleAt(n), sampleAt(n) * rate);
+
+  if (fits(poolLen)) return poolLen;
+  let hi = Math.max(poolLen, 1) * 2;
+  while (hi <= MINT_BUDGET_SEARCH_LIMIT && !fits(hi)) hi *= 2;
+  if (hi > MINT_BUDGET_SEARCH_LIMIT) return null;
+
+  let lo = Math.floor(hi / 2);
+  while (lo + 1 < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (fits(mid)) hi = mid;
+    else lo = mid;
+  }
+  return hi;
 }
 
 function requireFrame(msg, frameId) {

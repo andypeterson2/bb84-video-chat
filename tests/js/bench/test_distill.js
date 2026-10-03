@@ -7,12 +7,16 @@ import {
   distillSource,
   distillDetector,
   mintable,
+  secureKeyLength,
   leakage,
   cascadeBlockSizes,
   privacyAmplify,
   DistillError,
   CASCADE_PASSES,
   VERIFY_HASH_BITS,
+  MAX_QBER,
+  HALF_RATE_QBER,
+  binaryEntropy,
 } from '../../../website/client/static/js/bench/distill.js';
 import { randomBits, packBits, toB64 } from '../../../website/client/static/js/bench/packing.js';
 
@@ -62,15 +66,50 @@ describe('mint budget accounting', () => {
 
   test('a noisier pool needs more bits before it can mint', () => {
     expect(leakage(1000, 0.08)).toBeGreaterThan(leakage(1000, 0.02));
-    expect(mintable(1000, 128, 0.02)).toBe(true);
-    expect(mintable(600, 128, 0.11)).toBe(false);
+    // 4487 bits with an 896-bit sample is seven of the simulator's frames.
+    expect(mintable(4487, 128, 0.02, 896, 0.02 * 896)).toBe(true);
+    expect(mintable(600, 128, 0.11, 120, 0.11 * 120)).toBe(false);
+  });
+
+  test('the ceiling sits where this reconciliation runs out, not at the textbook 11%', () => {
+    // 1 - 2h(Q) reaches zero at 11%, which charges error correction the Shannon
+    // bound. Cascade discloses more than the bound, so the budget closes sooner.
+    const shorPreskill = 0.11;
+    expect(binaryEntropy(shorPreskill)).toBeCloseTo(0.5, 2);
+    expect(MAX_QBER).toBeLessThan(shorPreskill);
+    expect(MAX_QBER).toBeGreaterThan(0.072);
+    expect(MAX_QBER).toBeLessThan(0.074);
+    expect(HALF_RATE_QBER).toBeGreaterThan(0.033);
+    expect(HALF_RATE_QBER).toBeLessThan(0.035);
+  });
+
+  test('no pool of any size mints above the ceiling', () => {
+    const sampled = (n, qber) => {
+      const k = Math.round(n / 5);
+      return mintable(n, 128, qber, k, Math.round(k * qber));
+    };
+    for (let n = 1024; n <= 1 << 23; n *= 2) {
+      expect(sampled(n, MAX_QBER + 0.002)).toBe(false);
+      expect(sampled(n, 0.11)).toBe(false);
+    }
+    // Just under it a pool still mints, given enough of one.
+    expect(sampled(1 << 23, MAX_QBER - 0.004)).toBe(true);
   });
 
   test('mintable only when the pool covers target plus expected disclosure', () => {
-    expect(mintable(128, 128)).toBe(false);
-    const n = Array.from({ length: 2000 }, (_, i) => i).find((len) => mintable(len, 128));
-    expect(n - leakage(n)).toBeGreaterThanOrEqual(128);
-    expect(n - 1 - leakage(n - 1)).toBeLessThan(128);
+    expect(mintable(128, 128, 0, 26, 0)).toBe(false);
+    const n = Array.from({ length: 4000 }, (_, i) => i).find((len) =>
+      mintable(len, 128, 0, Math.round(len / 5), 0),
+    );
+    const secure = (len) =>
+      secureKeyLength({
+        poolLength: len,
+        samples: Math.round(len / 5),
+        sampleErrors: 0,
+        disclosed: leakage(len, 0),
+      });
+    expect(secure(n)).toBeGreaterThanOrEqual(128);
+    expect(secure(n - 1)).toBeLessThan(128);
   });
 });
 
@@ -120,7 +159,7 @@ describe('reconciliation at realistic QBER', () => {
     const noisy = withErrors(pool, qber, seed);
     const [a, b] = ioPair();
     const [srcKey, detKey] = await Promise.all([
-      distillSource([...pool], a, { mintId: 10, qber }),
+      distillSource([...pool], a, { mintId: 10, qber, allowance: pool.length }),
       distillDetector(noisy, b, { mintId: 10 }),
     ]);
     expect(Array.from(detKey)).toEqual(Array.from(srcKey));
@@ -132,7 +171,7 @@ describe('distillation', () => {
     const pool = Array.from(randomBits(600));
     const [a, b] = ioPair();
     const [srcKey, detKey] = await Promise.all([
-      distillSource([...pool], a, { mintId: 0 }),
+      distillSource([...pool], a, { mintId: 0, allowance: pool.length }),
       distillDetector([...pool], b, { mintId: 0 }),
     ]);
     expect(srcKey).toHaveLength(16);
@@ -145,7 +184,7 @@ describe('distillation', () => {
     noisy[43] ^= 1;
     const [a, b] = ioPair();
     const [srcKey, detKey] = await Promise.all([
-      distillSource([...pool], a, { mintId: 1 }),
+      distillSource([...pool], a, { mintId: 1, allowance: pool.length }),
       distillDetector(noisy, b, { mintId: 1 }),
     ]);
     expect(Array.from(detKey)).toEqual(Array.from(srcKey));
@@ -156,7 +195,7 @@ describe('distillation', () => {
     const [a, b] = ioPair();
     // A detector that skips correction and reports its uncorrected pool: the
     // failure class the verification hash exists to catch.
-    const source = distillSource([...pool], a, { mintId: 2, qber: 0.02 });
+    const source = distillSource([...pool], a, { mintId: 2, qber: 0.02, allowance: pool.length });
     await b.receive(['mint-cascade']);
     await b.send({ type: 'mint-corrected', mintId: 2 });
     await b.send({ type: 'mint-verify', mintId: 2, hash: 'not-the-hash' });
@@ -168,7 +207,7 @@ describe('distillation', () => {
   test('the source stops answering once disclosure would exceed the key budget', async () => {
     const pool = Array.from(randomBits(600));
     const [a, b] = ioPair();
-    const source = distillSource([...pool], a, { mintId: 6, qber: 0.02 });
+    const source = distillSource([...pool], a, { mintId: 6, qber: 0.02, allowance: 200 });
     await b.receive(['mint-cascade']);
     // Single-bit "parities" are the pool itself; the budget must cut this off.
     let answered = 0;
@@ -186,7 +225,11 @@ describe('distillation', () => {
 
   test('malformed or out-of-range parity queries are rejected', async () => {
     const [a, b] = ioPair();
-    const source = distillSource(Array.from(randomBits(600)), a, { mintId: 7, qber: 0.02 });
+    const source = distillSource(Array.from(randomBits(600)), a, {
+      mintId: 7,
+      qber: 0.02,
+      allowance: 600,
+    });
     await b.receive(['mint-cascade']);
     await b.send({ type: 'mint-parity-query', mintId: 7, ranges: [0, 10, 5000] });
     await expect(source).rejects.toMatchObject({ reason: 'protocol' });

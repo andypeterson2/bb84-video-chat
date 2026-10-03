@@ -8,6 +8,8 @@
  *   DataChannel: BB84 key exchange messages
  */
 
+import { MAX_QBER, HALF_RATE_QBER } from './js/bench/distill.js';
+
 /* State */
 const state = {
   signalingConnected: false,
@@ -80,9 +82,9 @@ const OPTICAL_TOKEN_KEY = 'qvc.optical.token';
 const QBER_HISTORY_CAP = 120;
 
 /** BB84 aborts above this QBER — intercept-resend lands near 25%. */
-const QBER_THRESHOLD = 0.11;
-/** Below the abort threshold but above ordinary channel noise. */
-const QBER_WARNING = 0.08;
+const QBER_THRESHOLD = MAX_QBER;
+/** Above this the link still mints, but at under half the clean key rate. */
+const QBER_WARNING = HALF_RATE_QBER;
 
 // Room token arriving via an invite link's #room= fragment (prefills Join).
 let pendingRoomToken = '';
@@ -372,7 +374,7 @@ function handleReservoirFailure(s) {
       if (state.qberHistory.length > QBER_HISTORY_CAP) state.qberHistory.shift();
     }
     logEvent(EVENT.qberAbort, { qber: s.qber ?? null });
-    showToast('QBER above the 11% threshold — frame rejected.');
+    showToast(`QBER above the ${(QBER_THRESHOLD * 100).toFixed(1)}% threshold — frame rejected.`);
   } else if (s.reason === 'setup') {
     state.cipherState = 'compromised';
     showToast('Secure-channel setup failed — no key will be established.');
@@ -557,7 +559,7 @@ function toggleEavesdropper() {
   render();
 }
 
-/** Per-frame QBER strip chart with the 11% abort threshold drawn in. */
+/** Per-frame QBER strip chart with the abort threshold drawn in. */
 function drawQberChart() {
   const c = document.getElementById('qd-chart');
   if (!c) return;
@@ -1139,7 +1141,7 @@ function render() {
               <span class="qd-distill-label" title="Sifted bits accumulated toward the next key; a noisy channel discards frames and slows this.">Distilling next key — ${state.reservoirBits.toLocaleString()}${state.mintBudget ? ` / ${state.mintBudget.toLocaleString()}` : ''} sifted bits</span>
             </div>
             <div class="qd-metrics">
-              <div class="qd-metric" title="Quantum bit error rate — how often a test bit disagrees. A spike above 11% aborts the batch (noise or eavesdropping)."><span class="qd-metric-value ${state.qber !== null && state.qber > QBER_THRESHOLD ? 'qd-metric--danger' : state.qber !== null && state.qber > QBER_WARNING ? 'qd-metric--warning' : ''}">${state.qber !== null ? (state.qber * 100).toFixed(1) + '%' : '--'}</span><span class="qd-metric-label">QBER</span></div>
+              <div class="qd-metric" title="Quantum bit error rate — how often a test bit disagrees. A spike above ${(QBER_THRESHOLD * 100).toFixed(1)}% aborts the batch (noise or eavesdropping)."><span class="qd-metric-value ${state.qber !== null && state.qber > QBER_THRESHOLD ? 'qd-metric--danger' : state.qber !== null && state.qber > QBER_WARNING ? 'qd-metric--warning' : ''}">${state.qber !== null ? (state.qber * 100).toFixed(1) + '%' : '--'}</span><span class="qd-metric-label">QBER</span></div>
               <div class="qd-metric" title="Encryption keys minted this call."><span class="qd-metric-value">${state.keysMinted}</span><span class="qd-metric-label">Keys</span></div>
               <div class="qd-metric" title="Times the media encryption key has rotated to a fresh one."><span class="qd-metric-value">${state.rotations}</span><span class="qd-metric-label">Rotations</span></div>
               <div class="qd-metric" title="Keys buffered and ready to rotate in."><span class="qd-metric-value">${state.poolDepth}</span><span class="qd-metric-label">Pool</span></div>

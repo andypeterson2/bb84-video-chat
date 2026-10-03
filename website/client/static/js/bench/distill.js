@@ -74,10 +74,125 @@ export function leakage(n, qber = DEFAULT_QBER) {
   return blockParities + bisection + VERIFY_HASH_BITS;
 }
 
-/** Whether a pool can mint a key of `target` bits after expected leakage. */
-export function mintable(poolLength, target, qber = DEFAULT_QBER) {
-  return poolLength - leakage(poolLength, qber) >= target;
+/**
+ * Failure probabilities for the two statistical steps. Parameter estimation
+ * bounds the true error rate from the sample; privacy amplification bounds the
+ * key's distance from uniform. Correctness is separate and is bought by the
+ * verification hash, which `leakage` already counts.
+ */
+export const EPS_PE = 1e-10;
+export const EPS_PA = 1e-10;
+
+/** Bits privacy amplification spends to reach EPS_PA: 2*log2(1/(2*EPS_PA)). */
+export const PA_SECURITY_BITS = Math.ceil(2 * Math.log2(1 / (2 * EPS_PA)));
+
+/** Binary entropy in bits. */
+export function binaryEntropy(p) {
+  if (p <= 0 || p >= 1) return p <= 0 || p >= 1 ? (p <= 0 ? 0 : 0) : 0;
+  return -p * Math.log2(p) - (1 - p) * Math.log2(1 - p);
 }
+
+/**
+ * How far the true error rate may sit above a sample of `k` bits drawn from a
+ * block that left `n` behind, at confidence EPS_PE. Sampling without
+ * replacement, so this is the Serfling-style penalty: it falls as 1/sqrt(k),
+ * which is why pooling frames matters more than any single frame's sample.
+ */
+export function finiteKeyPenalty(n, k) {
+  if (k <= 0) return 0.5;
+  return Math.sqrt((((n + k) / (n * k)) * (k + 1) * Math.log(4 / EPS_PE)) / k);
+}
+
+/**
+ * Bits of key a pool can yield, after Eve's information and the reconciliation
+ * disclosure. Negative means none.
+ *
+ * The term that matters is `n * h(Q + mu)`: error correction tells Eve the
+ * parities (counted in `disclosed`), and the errors themselves bound what she
+ * learned from the channel. Subtracting only the first is the mistake this
+ * function exists to prevent.
+ */
+export function secureKeyLength({ poolLength, samples, sampleErrors, disclosed }) {
+  if (!Number.isFinite(samples) || samples <= 0) return -Infinity;
+  const observed = Math.min(0.5, Math.max(0, sampleErrors / samples));
+  const bounded = Math.min(0.5, observed + finiteKeyPenalty(poolLength, samples));
+  const privacy = poolLength * (1 - binaryEntropy(bounded));
+  return Math.floor(privacy - disclosed - PA_SECURITY_BITS);
+}
+
+/**
+ * Parities the source may answer and still leave `target` bits of key. The
+ * source computes this, enforces it, and sends it; the detector uses the number
+ * it was sent rather than recomputing, because two engines can disagree on a
+ * float at the threshold and then disagree about whether the mint is alive.
+ */
+export function parityAllowance({ poolLength, samples, sampleErrors, target }) {
+  return (
+    secureKeyLength({ poolLength, samples, sampleErrors, disclosed: 0 }) - VERIFY_HASH_BITS - target
+  );
+}
+
+/**
+ * Whether a pool can mint `target` bits, using the leakage estimate for a
+ * reconciliation that has not run yet. `samples` is the pooled sample size and
+ * `sampleErrors` the errors seen in it; without them no bound on Eve exists.
+ */
+export function mintable(poolLength, target, qber = DEFAULT_QBER, samples = 0, sampleErrors = 0) {
+  const length = secureKeyLength({
+    poolLength,
+    samples,
+    sampleErrors,
+    disclosed: leakage(poolLength, qber),
+  });
+  return length >= target;
+}
+
+/**
+ * @private Key fraction a pool of unbounded size yields at `qber`: one bit per
+ * pooled bit, less what the errors tell Eve and what reconciliation discloses.
+ * The finite-key penalty vanishes in this limit, so this is the best case.
+ */
+function asymptoticRate(qber) {
+  const n = 1 << 20;
+  return 1 - binaryEntropy(qber) - leakage(n, qber) / n;
+}
+
+/** @private The largest qber for which `holds` is still true. */
+function largestQber(holds) {
+  let lo = 0;
+  let hi = 0.5;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    if (holds(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * The QBER above which no pool of any size yields key here: about 7.3%.
+ *
+ * The textbook BB84 figure is 11%, where the Shor-Preskill rate 1 - 2h(Q)
+ * reaches zero. That rate charges one h(Q) for reconciliation, which is the
+ * Shannon bound and assumes an error-correcting code that reaches it. Cascade
+ * does not: at the block sizing above, its parities and bisections disclose
+ * about 1.65 times h(Q), so the budget 1 - h(Q) - leakage(n, Q)/n closes
+ * earlier. 11% is the limit of the protocol; this is the limit of this
+ * implementation of it, and the gate has to be the second one.
+ *
+ * Computed from `leakage` rather than written down, so it follows the sizing.
+ * It is also the unbounded-pool limit: at the sample sizes the frame engine
+ * produces the ceiling is nearer 7.2%, and the pool a mint needs grows from a
+ * few thousand bits on a clean channel to millions at 7%. So this bounds what
+ * is reachable and `mintable` decides each pool.
+ */
+export const MAX_QBER = largestQber((qber) => asymptoticRate(qber) > 0);
+
+/**
+ * The QBER at which half the clean-channel key rate is gone: about 3.4%. Above
+ * it a link still mints, but it needs more than twice the frames to do it.
+ */
+export const HALF_RATE_QBER = largestQber((qber) => asymptoticRate(qber) > asymptoticRate(0) / 2);
 
 /** @private truncated SHA-256 of a bit string, as base64. */
 async function verifyHash(bits) {
@@ -302,18 +417,33 @@ export function privacyAmplify(bits, targetLength, seed) {
  *   estimates the pool's error rate and sets the Cascade block sizes
  * @returns {Promise<Uint8Array>} the minted key bytes
  */
-export async function distillSource(pool, io, { mintId, target = 128, qber = DEFAULT_QBER }) {
-  if (!mintable(pool.length, target, qber))
-    throw new DistillError('pool below mint budget', 'budget');
+export async function distillSource(
+  pool,
+  io,
+  { mintId, target = 128, qber = DEFAULT_QBER, samples = 0, sampleErrors = 0, allowance },
+) {
+  // `allowance` is for exercising reconciliation on its own, at error rates no
+  // pool can mint at. The engine never passes it: there the budget is the
+  // security bound, and a pool that cannot clear it does not reconcile at all.
+  if (allowance === undefined) {
+    if (!mintable(pool.length, target, qber, samples, sampleErrors))
+      throw new DistillError('pool below mint budget', 'budget');
+    allowance = parityAllowance({ poolLength: pool.length, samples, sampleErrors, target });
+  }
   const blockSizes = cascadeBlockSizes(pool.length, qber);
   const permSeed = crypto.getRandomValues(new Uint8Array(PERM_SEED_BYTES));
-  await io.send({ type: 'mint-cascade', mintId, blockSizes, permSeed: toB64(permSeed) });
+  await io.send({
+    type: 'mint-cascade',
+    mintId,
+    blockSizes,
+    permSeed: toB64(permSeed),
+    allowance,
+  });
   const prefixes = cascadeOrders(pool.length, blockSizes.length, permSeed).map((order) =>
     prefixParities(pool, order),
   );
   // The source enforces the budget as it answers, so no peer can learn more
   // parities than the key can absorb and still receive a key.
-  const allowance = pool.length - VERIFY_HASH_BITS - target;
   let disclosed = 0;
   for (;;) {
     const msg = await expectMint(io, ['mint-parity-query', 'mint-corrected'], mintId);
@@ -344,13 +474,16 @@ export async function distillSource(pool, io, { mintId, target = 128, qber = DEF
  */
 export async function distillDetector(pool, io, { mintId, target = 128 }) {
   const setup = await expectMint(io, ['mint-cascade'], mintId);
-  const { blockSizes } = setup;
+  const { blockSizes, allowance } = setup;
   const permSeed = fromB64(setup.permSeed);
   const validSizes =
     Array.isArray(blockSizes) &&
     blockSizes.length === CASCADE_PASSES &&
     blockSizes.every((k) => Number.isInteger(k) && k >= 1 && k <= pool.length);
   if (!validSizes || !permSeed || permSeed.length !== PERM_SEED_BYTES) {
+    throw new DistillError('cascade setup malformed', 'protocol');
+  }
+  if (!Number.isInteger(allowance) || allowance > pool.length) {
     throw new DistillError('cascade setup malformed', 'protocol');
   }
   const orders = cascadeOrders(pool.length, blockSizes.length, permSeed);
@@ -367,7 +500,7 @@ export async function distillDetector(pool, io, { mintId, target = 128 }) {
     return unpackBits(packed, ranges.length);
   };
   const { corrected, disclosed } = await cascadeCorrect(pool, orders, blockSizes, query);
-  if (pool.length - disclosed - VERIFY_HASH_BITS < target) {
+  if (disclosed > allowance) {
     throw new DistillError('reconciliation disclosed more than the key budget', 'budget');
   }
   await io.send({ type: 'mint-corrected', mintId });
