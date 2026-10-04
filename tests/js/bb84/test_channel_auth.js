@@ -374,7 +374,9 @@ describe('Orchestrator auth integration', () => {
       expect(p.installed.bob).toHaveLength(0);
 
       p.alice.setEavesdropper(false);
-      await p.untilMinted(1);
+      // A latch plus a whole mint: ~25 frames at 2048 slots and a 1.5% error
+      // floor, sharing a core with the rest of the suite.
+      await p.untilMinted(1, 30_000);
       keysAgree(p);
     } finally {
       p.destroy();
