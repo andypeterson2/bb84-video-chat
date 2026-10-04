@@ -107,8 +107,14 @@ export function orchestratorPair({
       await peers.alice.init({ roomToken: aliceToken, isInitiator: true });
       await peers.bob.init({ roomToken: bobToken, isInitiator: false });
     },
-    /** Wait until both sides have installed at least `n` keys. */
-    untilMinted: (n, timeout = 8000) =>
+    /**
+     * Wait until both sides have installed at least `n` keys.
+     *
+     * Generous because a mint is ~25 frames at 2048 slots once the channel's
+     * 1.5% error floor is paid for, and vitest runs these files beside twenty
+     * others on the same core. In isolation the same wait resolves in ~165ms.
+     */
+    untilMinted: (n, timeout = 45_000) =>
       vi.waitFor(
         () => {
           expect(installed.alice.length).toBeGreaterThanOrEqual(n);

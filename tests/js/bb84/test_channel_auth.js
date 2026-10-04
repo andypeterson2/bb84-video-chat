@@ -374,14 +374,14 @@ describe('Orchestrator auth integration', () => {
       expect(p.installed.bob).toHaveLength(0);
 
       p.alice.setEavesdropper(false);
-      // A latch plus a whole mint: ~25 frames at 2048 slots and a 1.5% error
-      // floor, sharing a core with the rest of the suite.
-      await p.untilMinted(1, 30_000);
+      await p.untilMinted(1);
       keysAgree(p);
     } finally {
       p.destroy();
     }
-  });
+    // Headroom for core contention: alone this takes ~165ms, and a latch plus a
+    // whole mint is the longest path in the suite.
+  }, 60_000);
 
   test('destroy → init gives call #2 a fresh fingerprint exchange and the same SAS', async () => {
     const p = await authPair();
