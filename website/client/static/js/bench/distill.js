@@ -175,9 +175,12 @@ function largestQber(holds) {
  * The textbook BB84 figure is 11%, where the Shor-Preskill rate 1 - 2h(Q)
  * reaches zero. That rate charges one h(Q) for reconciliation, which is the
  * Shannon bound and assumes an error-correcting code that reaches it. Cascade
- * does not: at the block sizing above, its parities and bisections disclose
- * about 1.65 times h(Q), so the budget 1 - h(Q) - leakage(n, Q)/n closes
- * earlier. 11% is the limit of the protocol; this is the limit of this
+ * `leakage` charges about 1.65 times h(Q) instead, so the budget
+ * 1 - h(Q) - leakage(n, Q)/n closes earlier. That 1.65 is what the estimator
+ * assumes; the wire carries less. Measured over 4000-bit pools the
+ * reconciliation discloses 1.25 to 1.37 times h(Q). Erring high is correct for
+ * a budget that has to hold before any parity is counted, and it leaves a real
+ * gain available to a tighter estimator. 11% is the limit of the protocol; this is the limit of this
  * implementation of it, and the gate has to be the second one.
  *
  * Computed from `leakage` rather than written down, so it follows the sizing.
