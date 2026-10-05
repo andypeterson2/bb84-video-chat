@@ -126,6 +126,37 @@ def _trusted_proxy_count() -> int:
         return 0
 
 
+def _accepted_origin_secrets() -> list[str]:
+    """The secrets the front door may present, newest first.
+
+    Comma-separated so the gateway can move to a new value without an outage: add
+    the new secret, switch the gateway, then drop the old one. Read per connection
+    so a changed environment takes effect without a restart.
+    """
+    raw = os.environ.get("ORIGIN_SECRET") or ""
+    return [part for part in (piece.strip() for piece in raw.split(",")) if part]
+
+
+def _front_door_ok(environ: dict) -> bool:
+    """Whether a handshake carries the gateway's X-Origin-Secret.
+
+    Fails closed. With ORIGIN_SECRET unset nothing connects unless
+    QVC_ALLOW_INSECURE=1, because the Railway origin is reachable from the public
+    internet and the recruiter-pass gate lives at the gateway, not here.
+    """
+    want = _accepted_origin_secrets()
+    if not want:
+        return os.environ.get("QVC_ALLOW_INSECURE") == "1"
+    got = environ.get("HTTP_X_ORIGIN_SECRET") or ""
+    # compare_digest against every candidate: a plain != leaks timing, and
+    # stopping at the first match would leak which secret matched.
+    ok = False
+    for candidate in want:
+        if hmac.compare_digest(got, candidate):
+            ok = True
+    return ok
+
+
 def _client_ip(environ: dict) -> str:
     """Client IP for rate limiting; trusts XFF only behind trusted proxies.
 
@@ -284,7 +315,10 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
 
     @sio.event
     def connect(sid, environ):
-        """Handle new peer connection (rejected outright when over the rate cap)."""
+        """Handle new peer connection (rejected over the rate cap or without the front door)."""
+        if not _front_door_ok(environ):
+            logger.warning("Rejected a handshake with no valid front-door secret")
+            return False
         ip = _client_ip(environ)
         if not limiter.allow(ip):
             logger.warning("Connection rate limit exceeded")

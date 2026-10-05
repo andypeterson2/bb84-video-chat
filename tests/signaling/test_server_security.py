@@ -9,7 +9,7 @@ Covers the hardening added in the 2026-09 security round:
 
 import pytest
 
-from signaling.server import _check_origin, _parse_cors, create_app
+from signaling.server import _check_origin, _front_door_ok, _parse_cors, create_app
 from signaling.throttle import RateLimiter
 
 ADMIN_HEADERS = {"X-Admin-Secret": "test-admin-secret"}
@@ -372,3 +372,52 @@ class TestLogRedaction:
         assert joined  # sanity: the lifecycle actually logged something
         assert "sid-abcdef123456" not in joined
         assert room_id not in joined
+
+
+class TestFrontDoorGuard:
+    """The handshake needs the gateway's X-Origin-Secret.
+
+    The Railway origin is reachable from the public internet and the
+    recruiter-pass gate lives at the gateway, so a peer that reaches this server
+    directly has skipped it.
+    """
+
+    def test_unset_secret_refuses_unless_development_opts_out(self, monkeypatch):
+        monkeypatch.delenv("ORIGIN_SECRET", raising=False)
+        monkeypatch.delenv("QVC_ALLOW_INSECURE", raising=False)
+        assert _front_door_ok({}) is False
+
+    def test_unset_secret_allows_when_development_opts_out(self, monkeypatch):
+        monkeypatch.delenv("ORIGIN_SECRET", raising=False)
+        monkeypatch.setenv("QVC_ALLOW_INSECURE", "1")
+        assert _front_door_ok({}) is True
+
+    def test_matching_secret_passes(self, monkeypatch):
+        monkeypatch.setenv("ORIGIN_SECRET", "s3cret")
+        assert _front_door_ok({"HTTP_X_ORIGIN_SECRET": "s3cret"}) is True
+
+    def test_wrong_or_missing_secret_fails(self, monkeypatch):
+        monkeypatch.setenv("ORIGIN_SECRET", "s3cret")
+        assert _front_door_ok({"HTTP_X_ORIGIN_SECRET": "nope"}) is False
+        assert _front_door_ok({}) is False
+
+    def test_rotation_accepts_either_value(self, monkeypatch):
+        monkeypatch.setenv("ORIGIN_SECRET", "new-one, old-one")
+        assert _front_door_ok({"HTTP_X_ORIGIN_SECRET": "new-one"}) is True
+        assert _front_door_ok({"HTTP_X_ORIGIN_SECRET": "old-one"}) is True
+        assert _front_door_ok({"HTTP_X_ORIGIN_SECRET": "retired"}) is False
+
+    def test_an_insecure_opt_out_does_not_override_a_configured_secret(self, monkeypatch):
+        monkeypatch.setenv("ORIGIN_SECRET", "s3cret")
+        monkeypatch.setenv("QVC_ALLOW_INSECURE", "1")
+        assert _front_door_ok({"HTTP_X_ORIGIN_SECRET": "nope"}) is False
+
+    def test_connect_is_refused_without_the_front_door(self, monkeypatch):
+        """End to end through the handler, not just the predicate."""
+        monkeypatch.setenv("ORIGIN_SECRET", "s3cret")
+        _app, sio, _rooms = create_app()
+        assert sio.handlers["/"]["connect"]("sid-1", {}) is False
+        assert (
+            sio.handlers["/"]["connect"]("sid-2", {"HTTP_X_ORIGIN_SECRET": "s3cret"})
+            is True
+        )
