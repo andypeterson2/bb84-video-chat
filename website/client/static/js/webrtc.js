@@ -139,8 +139,23 @@ export class WebRTCManager {
    * @returns {Promise<MediaStream>}
    */
   async getLocalMedia(constraints = DEFAULT_MEDIA_CONSTRAINTS) {
+    if (this._localStream) return this._localStream;
     this._localStream = await navigator.mediaDevices.getUserMedia(constraints);
     return this._localStream;
+  }
+
+  /**
+   * Adopt a stream the caller already obtained.
+   *
+   * WebKit grants getUserMedia against the user activation of the click, and
+   * that activation does not survive an await, so a page that fetches anything
+   * before asking is refused as though permission were denied. Such a page
+   * asks first and hands the stream here.
+   *
+   * @param {MediaStream} stream
+   */
+  useLocalMedia(stream) {
+    this._localStream = stream;
   }
 
   /** The active RTCPeerConnection (for the QualityController's getStats). */
