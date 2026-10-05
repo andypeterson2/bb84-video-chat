@@ -16,6 +16,9 @@ import {
 } from './driver.js';
 
 test('two benches negotiate optical mode and mint a shared key', async ({ browser }) => {
+  // The waits below sum to 165s, past the 90s default. A mint over the emulated
+  // fiber takes 8s to 19s locally and longer on a shared runner.
+  test.setTimeout(180_000);
   const alice = await browser.newContext();
   const bob = await browser.newContext();
   // The room creator is the SOURCE (pairs with the source daemon); the joiner
@@ -33,8 +36,8 @@ test('two benches negotiate optical mode and mint a shared key', async ({ browse
     await joinRoom(pageB, token);
 
     // Both sides negotiate the optical backend.
-    await expect(pageA.locator('.qd-mode')).toHaveText('OPTICAL', { timeout: 30_000 });
-    await expect(pageB.locator('.qd-mode')).toHaveText('OPTICAL', { timeout: 30_000 });
+    await expect(pageA.locator('.qd-mode')).toHaveText('OPTICAL', { timeout: 60_000 });
+    await expect(pageB.locator('.qd-mode')).toHaveText('OPTICAL', { timeout: 60_000 });
 
     await expectEncrypted(pageA);
     await expectEncrypted(pageB);
