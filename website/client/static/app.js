@@ -378,8 +378,9 @@ function handleReservoirFailure(s) {
   } else if (s.reason === 'setup') {
     state.cipherState = 'compromised';
     showToast('Secure-channel setup failed — no key will be established.');
-  } else if (s.reason === 'timeout') {
-    // A silent stretch; the session restarts on its own. No alarm.
+  } else if (s.reason === 'timeout' || s.reason === 'desync') {
+    // A silent stretch, or two sides briefly out of step; the session restarts
+    // on its own and neither says anything about the channel. No alarm.
   } else {
     // integrity / protocol / divergence: tampering OR an ordinary fault
     // (dropped message, version skew) — never assert MITM from one event.
