@@ -112,6 +112,11 @@ jobs:
       - name: Run e2e (two browser contexts + two bench daemons + emulated fiber)
         # launch.mjs (Playwright's webServer) brings up the detector daemon, the
         # source daemon, and the combined signaling+static server in order.
+        # The transport log is on because the failures worth catching here are
+        # intermittent and otherwise leave nothing behind: it is what says which
+        # peer dropped, and when. It costs a few hundred lines per run.
+        env:
+          QVC_SIO_DEBUG: '1'
         run: npx playwright test
 
       - name: Upload traces on failure
