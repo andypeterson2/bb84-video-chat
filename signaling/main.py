@@ -38,7 +38,14 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     """Start the signaling server."""
     host = os.environ.get("QVC_HOST", "127.0.0.1")
-    port = int(os.environ.get("QVC_SERVER_REST_PORT") or 0) or _find_available_port(host)
+    # PORT is what a PaaS assigns; QVC_SERVER_REST_PORT wins so a local run can
+    # pin one. Falling through to an OS-assigned port keeps the test harness
+    # working, where neither is set.
+    port = (
+        int(os.environ.get("QVC_SERVER_REST_PORT") or 0)
+        or int(os.environ.get("PORT") or 0)
+        or _find_available_port(host)
+    )
 
     flask_app, _sio, _rooms = create_app()
 

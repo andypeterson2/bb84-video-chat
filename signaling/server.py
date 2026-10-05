@@ -143,6 +143,11 @@ def _front_door_ok(environ: dict) -> bool:
     Fails closed. With ORIGIN_SECRET unset nothing connects unless
     QVC_ALLOW_INSECURE=1, because the Railway origin is reachable from the public
     internet and the recruiter-pass gate lives at the gateway, not here.
+
+    This runs at the Socket.IO namespace connect, which is the second half of the
+    handshake: a caller with no secret still opens an Engine.IO transport session
+    and is refused one packet later, so it buys a session id and nothing else. The
+    gateway is what keeps such a caller away from this container at all.
     """
     want = _accepted_origin_secrets()
     if not want:
