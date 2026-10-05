@@ -97,8 +97,10 @@ export class DaemonConnection {
         this._failPairing(new Error(`daemon refused pairing: ${msg.reason}`));
         break;
       case 'frame-sent': {
+        // The id comes off the wire, so the resolver it names is checked to be
+        // one before it is called.
         const r = this._sentResolvers.get(msg.frame_id);
-        if (r) {
+        if (typeof r === 'function') {
           this._sentResolvers.delete(msg.frame_id);
           r(msg);
         }
