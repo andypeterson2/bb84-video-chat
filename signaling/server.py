@@ -245,6 +245,18 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
             return respond_error("not_found", NotFound.description, 404)
         return None
 
+    # Every HTTP route but /health needs the gateway's secret, for the same
+    # reason the Socket.IO handshake does: this origin has a public Railway
+    # domain and the recruiter-pass gate lives at the gateway. /health is exempt
+    # because the platform's own healthcheck probes it and carries no secret.
+    @flask_app.before_request
+    def _http_front_door():
+        if flask_req.path == "/health":
+            return None
+        if _front_door_ok(flask_req.environ):
+            return None
+        return respond_error("needs_front_door", "This origin is reached through the gateway.", 403)
+
     @flask_app.route("/admin/status")
     def admin_status():
         """Return server health and stats."""
