@@ -17,6 +17,7 @@
     "globals": "^16.5.0",
     "jsdom": "^26.1.0",
     "prettier": "^3.9.6",
+    "socket.io-client": "4.8.4",
     "vitest": "^4.1.11"
   },
   "prettier": {
@@ -25,5 +26,9 @@
     "tabWidth": 2,
     "trailingComma": "all",
     "printWidth": 100
+  },
+  "dependencies": {
+    "express": "5.2.1",
+    "socket.io": "4.8.4"
   }
 }

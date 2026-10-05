@@ -86,7 +86,9 @@ process.on('SIGINT', shutdown);
   ]);
   await waitForPort(8782);
 
-  run('serve', [PY, join(here, 'serve.py')], { QVC_E2E_PORT: '8077' });
+  // The signalling server is Node now; the bench daemons above stay Python,
+  // since they drive instruments.
+  run('serve', [process.execPath, join(here, 'serve.mjs')], { QVC_E2E_PORT: '8077' });
   await waitForPort(8077);
   console.log('[launch] all services up');
 })().catch((err) => {
