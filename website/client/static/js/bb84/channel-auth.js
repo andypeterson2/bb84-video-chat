@@ -73,6 +73,21 @@ export class ChannelAuthError extends Error {
   }
 }
 
+/**
+ * A message whose sequence number is not the one this channel expects:
+ * replayed, reordered, dropped, or left over from a session that has since
+ * been torn down. The two sides are out of step, which says nothing about
+ * whether the key is sound, so callers resynchronise instead of treating the
+ * channel as broken. A subclass, so code that aborts on any authentication
+ * failure still catches it.
+ */
+export class ChannelSyncError extends ChannelAuthError {
+  constructor(message) {
+    super(message);
+    this.name = 'ChannelSyncError';
+  }
+}
+
 const te = new TextEncoder();
 
 function toBase64(buf) {
@@ -181,17 +196,25 @@ export class ChannelAuth {
 }
 
 /**
- * Wraps a classical channel in the {v, seq, payload, tag} envelope.
+ * Wraps a classical channel in the {v, dom, seq, payload, tag} envelope.
  *
  * Lives at the adapter layer, below the frame/sift/distill logic. Sequence
  * numbers are per-direction and monotonic from 0; the receive side accepts
  * exactly the next expected sequence, so replayed, reordered, or dropped
- * messages surface as a ChannelAuthError rather than being absorbed.
+ * messages are reported as a ChannelSyncError rather than being absorbed.
  *
  * One instance covers one MAC domain: the orchestrator builds a fresh one per
  * round (kind 'msg') and a one-shot one for the fingerprint exchange (kind
  * 'fp'), so sequence spaces restart at each boundary and an envelope captured
  * in one domain never verifies in another.
+ *
+ * `dom` names that domain on the wire so a message for another one is skipped
+ * before the sequence and MAC checks instead of failing them. Sessions share
+ * the underlying transport, so without it a message still in flight when a
+ * session is torn down lands in the successor and reads there as a sequence
+ * violation or a MAC failure — indistinguishable from an attack. The field
+ * cannot be abused: it is covered by the MAC, so changing it only causes the
+ * message to be skipped, exactly as not sending it would.
  */
 export class AuthenticatedClassicalChannel {
   /**
@@ -217,26 +240,36 @@ export class AuthenticatedClassicalChannel {
     const seq = this._sendSeq++;
     const tag = this._auth.sign(this._kind, seq, payload);
     const sent = this._sendTail.then(async () =>
-      this._inner.send({ v: 1, seq, payload, tag: await tag }),
+      this._inner.send({ v: 1, dom: this._kind, seq, payload, tag: await tag }),
     );
     this._sendTail = sent.catch(() => {});
     return sent;
   }
 
   async receive() {
-    const env = await this._inner.receive();
-    if (
-      !env ||
-      typeof env !== 'object' ||
-      env.v !== 1 ||
-      typeof env.payload !== 'string' ||
-      typeof env.tag !== 'string' ||
-      !Number.isInteger(env.seq)
-    ) {
-      throw new ChannelAuthError('malformed authenticated envelope');
+    for (;;) {
+      const env = await this._inner.receive();
+      if (
+        !env ||
+        typeof env !== 'object' ||
+        env.v !== 1 ||
+        typeof env.payload !== 'string' ||
+        typeof env.tag !== 'string' ||
+        !Number.isInteger(env.seq)
+      ) {
+        throw new ChannelAuthError('malformed authenticated envelope');
+      }
+      // A peer that does not label its domain gets the checks below, so a
+      // mixed-version call still works; only a mismatched label is skipped.
+      if (typeof env.dom === 'string' && env.dom !== this._kind) continue;
+      return this._open(env);
     }
+  }
+
+  /** @private sequence, MAC and JSON checks for a message of this domain. */
+  async _open(env) {
     if (env.seq !== this._recvSeq) {
-      throw new ChannelAuthError(`sequence violation: expected ${this._recvSeq}, got ${env.seq}`);
+      throw new ChannelSyncError(`sequence violation: expected ${this._recvSeq}, got ${env.seq}`);
     }
     const ok = await this._auth.verify(this._kind, env.seq, env.payload, env.tag);
     if (!ok) throw new ChannelAuthError('MAC verification failed');

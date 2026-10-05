@@ -10,6 +10,7 @@ import { describe, test, expect } from 'vitest';
 import {
   ChannelAuth,
   ChannelAuthError,
+  ChannelSyncError,
   AuthenticatedClassicalChannel,
 } from '../../../website/client/static/js/bb84/channel-auth.js';
 import {
@@ -135,6 +136,67 @@ describe('AuthenticatedClassicalChannel', () => {
     // Replay the captured wire message verbatim.
     muxA._sendFn(wires[0]);
     await expect(b.receive()).rejects.toThrow(/sequence violation/);
+  });
+
+  test('a replay is reported as a desync, not as a broken channel', async () => {
+    const { a, b, muxA } = await authChannelPair();
+    const wires = [];
+    const origSend = muxA._sendFn;
+    muxA._sendFn = (raw) => {
+      wires.push(raw);
+      origSend(raw);
+    };
+    await a.send({ type: 'once' });
+    expect(await b.receive()).toEqual({ type: 'once' });
+    muxA._sendFn(wires[0]);
+    // Separable from a MAC failure, yet still an auth error.
+    const err = await b.receive().catch((e) => e);
+    expect(err).toBeInstanceOf(ChannelSyncError);
+    expect(err).toBeInstanceOf(ChannelAuthError);
+  });
+
+  test('a tampered payload is NOT a desync — it stays a MAC failure', async () => {
+    const { a, b, muxA } = await authChannelPair();
+    const origSend = muxA._sendFn;
+    muxA._sendFn = (raw) => {
+      const msg = JSON.parse(raw);
+      if (msg.ch === 'classical') {
+        msg.payload.payload = JSON.stringify({ type: 'evil' });
+        origSend(JSON.stringify(msg));
+      } else {
+        origSend(raw);
+      }
+    };
+    await a.send({ type: 'honest' });
+    const err = await b.receive().catch((e) => e);
+    expect(err).toBeInstanceOf(ChannelAuthError);
+    expect(err).not.toBeInstanceOf(ChannelSyncError);
+  });
+
+  test('a message for another domain is skipped, not failed', async () => {
+    const [muxA, muxB] = muxPair();
+    const authA = await ChannelAuth.create(TOKEN, 'initiator');
+    const authB = await ChannelAuth.create(TOKEN, 'joiner');
+    // Two domains over one transport, as consecutive sessions are.
+    const stale = new AuthenticatedClassicalChannel(
+      new DataChannelClassicalChannel(muxA),
+      authA,
+      'frames-0',
+    );
+    const fresh = new AuthenticatedClassicalChannel(
+      new DataChannelClassicalChannel(muxA),
+      authA,
+      'frames-1',
+    );
+    const reader = new AuthenticatedClassicalChannel(
+      new DataChannelClassicalChannel(muxB),
+      authB,
+      'frames-1',
+    );
+    // A message still in flight from the torn-down session, then the real one.
+    await stale.send({ type: 'left-over' });
+    await fresh.send({ type: 'wanted' });
+    expect(await reader.receive()).toEqual({ type: 'wanted' });
   });
 
   test('concurrent sends reach the wire in sequence order however signing interleaves', async () => {
@@ -267,7 +329,7 @@ describe('Orchestrator auth integration', () => {
       // The fingerprint MAC never verifies, so streaming never starts.
       for (const side of ['alice', 'bob']) {
         for (const f of phase(p, side, 'failed')) {
-          expect(['setup', 'integrity', 'timeout']).toContain(f.reason);
+          expect(['setup', 'integrity', 'timeout', 'desync']).toContain(f.reason);
         }
       }
       expect(p.installed.alice).toHaveLength(0);
@@ -358,6 +420,30 @@ describe('Orchestrator auth integration', () => {
       expect(p.bob._engine._sessionN).toBeLessThan(sessionBefore + 100);
       keysAgree(p); // existing keys still agree — no desync
       expect(has(p.states.bob, (s) => s.phase === 'exhausted')).toBe(false);
+    } finally {
+      p.destroy();
+    }
+  });
+
+  test('being out of step restarts the session however often it happens', async () => {
+    const p = await authPair();
+    try {
+      await p.untilMinted(1);
+      const engine = p.alice._engine;
+      // More consecutive desyncs than the latch allows. A sequence the peer
+      // did not expect is transport trouble, so none of them count toward
+      // 'exhausted' — otherwise a reordered message, or one left over from a
+      // session that has just been torn down, would report a compromise.
+      for (let i = 0; i < 5; i++) {
+        await p.waitFor(() => expect(engine._session).toBeTruthy());
+        engine._onSessionFailure(
+          new ChannelSyncError('sequence violation: expected 0, got 47'),
+          engine._session,
+        );
+      }
+      expect(phase(p, 'alice', 'failed').some((s) => s.reason === 'desync')).toBe(true);
+      expect(engine._exhausted).toBe(false);
+      expect(has(p.states.alice, (s) => s.phase === 'exhausted')).toBe(false);
     } finally {
       p.destroy();
     }
