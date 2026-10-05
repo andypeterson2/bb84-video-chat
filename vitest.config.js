@@ -5,8 +5,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['tests/js/**/test_*.js', 'tests/js/**/*.test.js'],
-    // Exceeds the harness's 45s mint wait, or a test aborts before its own wait
-    // reports. A mint is ~25 frames, and these files share one core.
-    testTimeout: 60000,
+    // Minting real keys is slow enough that parallel files starve each other:
+    // the heaviest swings 4s to 48s and fails one run in five. Serially, 22s.
+    fileParallelism: false,
+    testTimeout: 20000,
   },
 });

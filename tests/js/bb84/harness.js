@@ -49,7 +49,7 @@ export function orchestratorPair({
   aliceToken = null,
   bobToken = null,
   tamper = null,
-  slotsPerFrame = 2048,
+  slotsPerFrame = 8192,
 } = {}) {
   const installed = { alice: [], bob: [] };
   const states = { alice: [], bob: [] };
@@ -110,11 +110,11 @@ export function orchestratorPair({
     /**
      * Wait until both sides have installed at least `n` keys.
      *
-     * Generous because a mint is ~25 frames at 2048 slots once the channel's
-     * 1.5% error floor is paid for, and vitest runs these files beside twenty
-     * others on the same core. In isolation the same wait resolves in ~165ms.
+     * A mint is about six frames at 8192 slots once the channel's 1.5% error
+     * floor is paid for, and these files run one at a time, so it resolves in
+     * well under a second.
      */
-    untilMinted: (n, timeout = 45_000) =>
+    untilMinted: (n, timeout = 15_000) =>
       vi.waitFor(
         () => {
           expect(installed.alice.length).toBeGreaterThanOrEqual(n);
