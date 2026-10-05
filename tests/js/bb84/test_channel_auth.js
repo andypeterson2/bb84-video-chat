@@ -379,9 +379,7 @@ describe('Orchestrator auth integration', () => {
     } finally {
       p.destroy();
     }
-    // Headroom for core contention: alone this takes ~165ms, and a latch plus a
-    // whole mint is the longest path in the suite.
-  }, 60_000);
+  });
 
   test('destroy → init gives call #2 a fresh fingerprint exchange and the same SAS', async () => {
     const p = await authPair();

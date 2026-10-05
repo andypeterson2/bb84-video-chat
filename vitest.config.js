@@ -5,8 +5,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['tests/js/**/test_*.js', 'tests/js/**/*.test.js'],
-    // Real crypto key mints can exceed the 5s default under parallel CI load;
-    // heavy tests may raise it further.
-    testTimeout: 15000,
+    // Exceeds the harness's 45s mint wait, or a test aborts before its own wait
+    // reports. A mint is ~25 frames, and these files share one core.
+    testTimeout: 60000,
   },
 });
