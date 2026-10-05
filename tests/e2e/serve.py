@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 os.environ["SIO_ASYNC_MODE"] = "eventlet"
 os.environ.setdefault("QVC_DEVELOPMENT", "true")
+# The front-door guard fails closed, and the browser here talks to this server
+# directly rather than through the gateway that would carry the secret.
+os.environ.setdefault("QVC_ALLOW_INSECURE", "1")
 
 from flask import send_from_directory  # noqa: E402
 
