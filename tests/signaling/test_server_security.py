@@ -421,3 +421,41 @@ class TestFrontDoorGuard:
             sio.handlers["/"]["connect"]("sid-2", {"HTTP_X_ORIGIN_SECRET": "s3cret"})
             is True
         )
+
+
+class TestHttpFrontDoorGuard:
+    """Every HTTP route but /health needs the gateway's secret too.
+
+    The Socket.IO guard alone left /ice-servers and /api open on the public
+    Railway domain; /ice-servers mints TURN credentials once a TURN secret is
+    configured.
+    """
+
+    @pytest.fixture
+    def guarded(self, monkeypatch):
+        monkeypatch.setenv("ORIGIN_SECRET", "s3cret")
+        monkeypatch.setenv("QVC_ADMIN_SECRET", "test-admin-secret")
+        app, _sio, _rooms = create_app()
+        return app.test_client()
+
+    def test_health_stays_open_for_the_platform_probe(self, guarded):
+        assert guarded.get("/health").status_code == 200
+
+    def test_ice_servers_needs_the_secret(self, guarded):
+        assert guarded.get("/ice-servers").status_code == 403
+        ok = guarded.get("/ice-servers", headers={"X-Origin-Secret": "s3cret"})
+        assert ok.status_code == 200
+        assert "iceServers" in ok.get_json()
+
+    def test_discovery_needs_the_secret(self, guarded):
+        assert guarded.get("/api").status_code == 403
+        assert guarded.get("/api", headers={"X-Origin-Secret": "s3cret"}).status_code == 200
+
+    def test_the_refusal_uses_the_error_envelope(self, guarded):
+        body = guarded.get("/api").get_json()
+        assert body["error"]["code"] == "needs_front_door"
+
+    def test_admin_stays_closed_even_with_the_secret(self, guarded, monkeypatch):
+        """The front door is not an admin credential."""
+        hdr = {"X-Origin-Secret": "s3cret"}
+        assert guarded.get("/admin/rooms", headers=hdr).status_code == 404
