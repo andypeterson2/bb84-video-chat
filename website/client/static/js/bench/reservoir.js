@@ -53,9 +53,10 @@ const MAX_CONSECUTIVE_FAILURES = 3;
  * Failure reasons that count toward the latch. The latch means no fresh key is
  * obtainable from the channel itself, so it is driven by what the measurement
  * says — a QBER over threshold, a frame that could not be measured, a broken
- * integrity check. Transport trouble (a deadline, a desync) says nothing about
- * the channel's security and restarts instead, or a slow link would paint the
- * call red and leave it there.
+ * integrity check. Transport trouble says nothing about the channel's
+ * security and restarts instead, or a slow link would paint the call red and
+ * leave it there: 'timeout' for a deadline, 'desync' for a sequence the peer
+ * did not expect, which a replay or a reordered message also produces.
  */
 const LATCHING_REASONS = new Set(['integrity', 'qber-exceeded', 'sample-too-small']);
 /** Restart backoff grows to this multiple of the base delay. */
@@ -418,13 +419,15 @@ export class ReservoirEngine {
     if (this._destroyed || this._session !== session) return;
     this._teardownSession('failure');
     const reason =
-      err instanceof DistillError || err?.name === 'ChannelAuthError'
-        ? 'integrity'
-        : err instanceof MuxAbortError || err?.name === 'MuxAbortError'
-          ? 'timeout'
-          : err instanceof SessionError
-            ? err.reason
-            : 'error';
+      err?.name === 'ChannelSyncError'
+        ? 'desync'
+        : err instanceof DistillError || err?.name === 'ChannelAuthError'
+          ? 'integrity'
+          : err instanceof MuxAbortError || err?.name === 'MuxAbortError'
+            ? 'timeout'
+            : err instanceof SessionError
+              ? err.reason
+              : 'error';
     this._onState({ phase: 'failed', reason, error: err });
 
     if (LATCHING_REASONS.has(reason)) {
