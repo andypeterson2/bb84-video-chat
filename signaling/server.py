@@ -195,12 +195,15 @@ def create_app() -> tuple[Flask, socketio.Server, RoomManager]:  # noqa: C901, P
     # Cap inbound frames so an oversize payload can't exhaust memory. The largest
     # message, an SDP offer, is a few KB; overridable for unusual SDP.
     _max_buffer = int(os.environ.get("QVC_MAX_HTTP_BUFFER", str(64 * 1024)))
+    # Off by default: these log every packet, ping and pong included. On, they
+    # show transport connects, timeouts and closes.
+    _sio_debug = os.environ.get("QVC_SIO_DEBUG") == "1"
     sio = socketio.Server(
         cors_allowed_origins=_check_origin,
         async_mode=_async_mode,
         max_http_buffer_size=_max_buffer,
-        logger=False,
-        engineio_logger=False,
+        logger=_sio_debug,
+        engineio_logger=_sio_debug,
     )
     wsgi_app = socketio.WSGIApp(sio, flask_app)
     # Attach as a separate attribute (not flask_app.wsgi_app to avoid recursion)

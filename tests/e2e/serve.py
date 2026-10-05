@@ -13,9 +13,21 @@ import eventlet
 
 eventlet.monkey_patch()  # must run before other imports pull in socket/ssl
 
+import logging  # noqa: E402
 import os  # noqa: E402
 import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
+
+# Nothing else configures logging for this entry point, so without it the
+# signaling server is silent: room, join and peer-disconnect events never reach
+# the run output, and an intermittent failure leaves no record of which peer
+# went away or when.
+logging.basicConfig(
+    level=logging.DEBUG if os.environ.get("QVC_DEBUG") else logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s  %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
