@@ -16,9 +16,8 @@ import {
 } from './driver.js';
 
 test('two benches negotiate optical mode and mint a shared key', async ({ browser }) => {
-  // The waits below sum to 165s; the 90s default kills the test before it can
-  // spend them. A mint over the emulated fiber takes 8s to 19s locally and
-  // longer on a shared runner, and retries are off here on purpose.
+  // The waits below sum to 165s, past the 90s default. A mint over the emulated
+  // fiber takes 8s to 19s locally and longer on a shared runner.
   test.setTimeout(180_000);
   const alice = await browser.newContext();
   const bob = await browser.newContext();
