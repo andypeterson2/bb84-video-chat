@@ -34,8 +34,5 @@ bench/*.local.toml
 test-results
 playwright-report
 
-# The linter plugin is shared, so its settings file is tracked. Re-including the
-# directory is required before the file, then everything else there stays local.
-!.claude/
-.claude/*
-!.claude/settings.json
+# Local tool config, kept on this machine only.
+windbag.toml
