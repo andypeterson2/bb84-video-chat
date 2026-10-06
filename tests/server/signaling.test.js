@@ -80,11 +80,30 @@ describe('rooms', () => {
     expect((await failure).message).toMatch(/Cannot create room/);
   });
 
-  test('joining a room that does not exist is refused', async () => {
+  test('joining a room that does not exist says the invite is stale', async () => {
     const a = track(await connect(running.url));
     const failure = next(a, 'error');
     a.emit('join_room', { room_id: 'nope' });
-    expect((await failure).message).toMatch(/Cannot join room/);
+    const refusal = await failure;
+    expect(refusal.reason).toBe('no-such-room');
+    expect(refusal.message).toMatch(/no longer valid/);
+  });
+
+  test('a third peer is told the call is full', async () => {
+    const [a, , roomId] = await paired(running.url);
+    const c = track(await connect(running.url));
+    const failure = next(c, 'error');
+    c.emit('join_room', { room_id: roomId });
+    const refusal = await failure;
+    expect(refusal.reason).toBe('room-full');
+    expect(a.connected).toBe(true);
+  });
+
+  test('a peer already in a call is told to leave it first', async () => {
+    const [a] = await paired(running.url);
+    const failure = next(a, 'error');
+    a.emit('join_room', { room_id: 'anything' });
+    expect((await failure).reason).toBe('already-in-a-room');
   });
 
   test('a join accepts a bare string as well as an object', async () => {

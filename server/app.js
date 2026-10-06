@@ -68,6 +68,17 @@ const STREAMING = [
   },
 ];
 
+/**
+ * Why a join was refused, in words the person who clicked a link can act on.
+ * Rooms are held in memory, so every live invite points at a room that exists
+ * only until this process restarts.
+ */
+const JOIN_REFUSALS = {
+  'already-in-a-room': 'You are already in a call. Leave it before joining another.',
+  'no-such-room': 'That invite is no longer valid — the server restarted. Ask for a new link.',
+  'room-full': 'That call already has two people in it.',
+};
+
 /** HTTP endpoints, declared beside their handlers so /api can list them. */
 const ENDPOINTS = [
   { method: 'GET', path: '/admin/status', summary: 'Return server health and stats.' },
@@ -432,10 +443,10 @@ export function attachSocketIo(httpServer, { rooms, limiter, sidIps, originAllow
         return;
       }
       const roomId = data && typeof data === 'object' ? (data.room_id ?? '') : String(data ?? '');
-      const room = rooms.joinRoom(sid, roomId);
+      const { room, reason } = rooms.joinRoom(sid, roomId);
       if (!room) {
-        // Deliberately does not echo the attempted token back.
-        socket.emit('error', { message: 'Cannot join room' });
+        // Says why without echoing the attempted token, which is a credential.
+        socket.emit('error', { message: JOIN_REFUSALS[reason] ?? 'Cannot join room', reason });
         return;
       }
       const other = room.otherPeer(sid);

@@ -100,15 +100,21 @@ export class RoomManager {
     return room;
   }
 
-  /** Join an existing room, or null when it is missing, full, or ineligible. */
+  /**
+   * Join an existing room. Returns `{ room }` on success, or `{ reason }` with
+   * one of 'already-in-a-room', 'no-such-room' or 'room-full'. The caller needs
+   * the reason: rooms live in this process's memory, so a restart makes every
+   * live link fail with 'no-such-room', which is worth saying out loud.
+   */
   joinRoom(sid, roomId) {
     const peer = this._peers.get(sid);
-    if (!peer || peer.roomId !== null) return null;
+    if (!peer || peer.roomId !== null) return { room: null, reason: 'already-in-a-room' };
     const room = this._rooms.get(roomId);
-    if (!room || room.isFull) return null;
+    if (!room) return { room: null, reason: 'no-such-room' };
+    if (room.isFull) return { room: null, reason: 'room-full' };
     room.peers.push(sid);
     peer.roomId = roomId;
-    return room;
+    return { room, reason: null };
   }
 
   /** Remove a peer from their room. Returns the room id they left. */

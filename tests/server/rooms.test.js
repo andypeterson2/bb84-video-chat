@@ -49,21 +49,24 @@ describe('creating and joining', () => {
 
   test('joining a room that does not exist fails', () => {
     rooms.registerPeer('a');
-    expect(rooms.joinRoom('a', 'nope')).toBeNull();
+    expect(rooms.joinRoom('a', 'nope')).toEqual({ room: null, reason: 'no-such-room' });
   });
 
   test('a third peer cannot join a full room', () => {
     for (const sid of ['a', 'b', 'c']) rooms.registerPeer(sid);
     const room = rooms.createRoom('a');
-    expect(rooms.joinRoom('b', room.roomId)).not.toBeNull();
-    expect(rooms.joinRoom('c', room.roomId)).toBeNull();
+    expect(rooms.joinRoom('b', room.roomId).room).not.toBeNull();
+    expect(rooms.joinRoom('c', room.roomId)).toEqual({ room: null, reason: 'room-full' });
   });
 
   test('a peer already in a room cannot join another', () => {
     for (const sid of ['a', 'b']) rooms.registerPeer(sid);
     const first = rooms.createRoom('a');
     const second = rooms.createRoom('b');
-    expect(rooms.joinRoom('a', second.roomId)).toBeNull();
+    expect(rooms.joinRoom('a', second.roomId)).toEqual({
+      room: null,
+      reason: 'already-in-a-room',
+    });
     expect(first.peers).toEqual(['a']);
   });
 });
