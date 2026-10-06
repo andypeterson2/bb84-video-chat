@@ -246,7 +246,9 @@ describe('client addressing', () => {
 
   test('behind two proxies it takes the second hop from the right', () => {
     process.env.QVC_TRUSTED_PROXIES = '2';
-    expect(clientIp({ 'x-forwarded-for': '1.2.3.4, 9.9.9.9, 10.0.0.2' }, '10.0.0.1')).toBe('9.9.9.9');
+    expect(clientIp({ 'x-forwarded-for': '1.2.3.4, 9.9.9.9, 10.0.0.2' }, '10.0.0.1')).toBe(
+      '9.9.9.9',
+    );
   });
 
   test('a chain shorter than the trusted count falls back to the socket address', () => {

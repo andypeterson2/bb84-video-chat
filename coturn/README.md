@@ -8,7 +8,7 @@ E2EE sits above that.
 ## Credentials — ephemeral, never long-lived on the client
 
 coturn runs with `use-auth-secret` (the TURN REST API). The **signaling server**
-mints short-lived credentials with the *same* secret (`signaling/turn.py`,
+mints short-lived credentials with the *same* secret (`server/turn.js`,
 `GET /ice-servers`); coturn recomputes the HMAC to validate them. No long-lived
 secret ever reaches the browser.
 

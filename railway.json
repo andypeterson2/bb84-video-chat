@@ -3,7 +3,7 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile.server",
-    "watchPatterns": ["signaling/**", "Dockerfile.server"]
+    "watchPatterns": ["server/**", "package.json", "package-lock.json", "Dockerfile.server"]
   },
   "deploy": {
     "healthcheckPath": "/health",

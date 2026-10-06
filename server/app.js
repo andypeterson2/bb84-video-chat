@@ -27,16 +27,40 @@ export const SERVICE = 'qvc';
  * is the explicit live-only layer.
  */
 const STREAMING = [
-  { protocol: 'socket.io', event: 'welcome', description: "Connection acknowledgement carrying the peer's sid." },
+  {
+    protocol: 'socket.io',
+    event: 'welcome',
+    description: "Connection acknowledgement carrying the peer's sid.",
+  },
   { protocol: 'socket.io', event: 'offer', description: 'Relay SDP offer to the room peer.' },
   { protocol: 'socket.io', event: 'answer', description: 'Relay SDP answer to the room peer.' },
-  { protocol: 'socket.io', event: 'ice-candidate', description: 'Relay ICE candidate to the room peer.' },
-  { protocol: 'socket.io', event: 'request-ice-restart', description: 'Ask the initiator to restart ICE.' },
+  {
+    protocol: 'socket.io',
+    event: 'ice-candidate',
+    description: 'Relay ICE candidate to the room peer.',
+  },
+  {
+    protocol: 'socket.io',
+    event: 'request-ice-restart',
+    description: 'Ask the initiator to restart ICE.',
+  },
   { protocol: 'socket.io', event: 'room-created', description: 'Room-creation result.' },
   { protocol: 'socket.io', event: 'room-joined', description: 'Room-join result (both peers).' },
-  { protocol: 'socket.io', event: 'peer-disconnected', description: 'Peer left/disconnected notification.' },
-  { protocol: 'socket.io', event: 'eve-demo', description: 'Relay the eavesdropper-demo state to the peer.' },
-  { protocol: 'socket.io', event: 'error', description: 'Rate-limit or room-operation failure notice.' },
+  {
+    protocol: 'socket.io',
+    event: 'peer-disconnected',
+    description: 'Peer left/disconnected notification.',
+  },
+  {
+    protocol: 'socket.io',
+    event: 'eve-demo',
+    description: 'Relay the eavesdropper-demo state to the peer.',
+  },
+  {
+    protocol: 'socket.io',
+    event: 'error',
+    description: 'Rate-limit or room-operation failure notice.',
+  },
   {
     protocol: 'webrtc',
     description:
@@ -50,9 +74,17 @@ const ENDPOINTS = [
   { method: 'GET', path: '/admin/events', summary: 'Return recent events for the dashboard.' },
   { method: 'GET', path: '/admin/rooms', summary: 'Return active rooms for the dashboard.' },
   { method: 'GET', path: '/admin/peers', summary: 'Return connected peers for the dashboard.' },
-  { method: 'GET', path: '/api', summary: 'Discovery index: HTTP endpoints plus signaling channels.' },
+  {
+    method: 'GET',
+    path: '/api',
+    summary: 'Discovery index: HTTP endpoints plus signaling channels.',
+  },
   { method: 'GET', path: '/health', summary: 'Liveness probe for the qvc signaling backend.' },
-  { method: 'GET', path: '/ice-servers', summary: 'WebRTC ICE servers: STUN, plus TURN if configured.' },
+  {
+    method: 'GET',
+    path: '/ice-servers',
+    summary: 'WebRTC ICE servers: STUN, plus TURN if configured.',
+  },
 ];
 
 function version() {
@@ -203,7 +235,10 @@ export function createApp() {
       res.setHeader('Vary', 'Origin');
     }
     if (req.method === 'OPTIONS') {
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Secret, X-Origin-Secret');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, X-Admin-Secret, X-Origin-Secret',
+      );
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
       res.status(204).end();
       return;
@@ -396,8 +431,7 @@ export function attachSocketIo(httpServer, { rooms, limiter, sidIps, originAllow
         socket.emit('error', { message: 'Rate limit exceeded — slow down' });
         return;
       }
-      const roomId =
-        data && typeof data === 'object' ? (data.room_id ?? '') : String(data ?? '');
+      const roomId = data && typeof data === 'object' ? (data.room_id ?? '') : String(data ?? '');
       const room = rooms.joinRoom(sid, roomId);
       if (!room) {
         // Deliberately does not echo the attempted token back.

@@ -25,7 +25,8 @@ export function start({ host = process.env.QVC_HOST ?? '127.0.0.1', listenPort =
   });
 }
 
-const invokedDirectly = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop());
+const invokedDirectly =
+  process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop());
 if (invokedDirectly) {
   const running = await start();
   const shutdown = (signal) => {

@@ -25,7 +25,9 @@ afterEach(async () => {
 });
 
 const admin = (path) =>
-  fetch(`${running.url}${path}`, { headers: { 'X-Admin-Secret': 'letmein' } }).then((r) => r.json());
+  fetch(`${running.url}${path}`, { headers: { 'X-Admin-Secret': 'letmein' } }).then((r) =>
+    r.json(),
+  );
 
 /** A short settle, so a test can assert that nothing arrived. */
 const settle = () => new Promise((r) => setTimeout(r, 120));
