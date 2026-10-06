@@ -13,7 +13,7 @@ Browser A ◄══ WebRTC (P2P encrypted media) ══► Browser B
                                   (SDP + ICE relay only)
 ```
 
-The signaling server is Flask and never sees media. BB84 messages travel on a DataChannel. Frames are encrypted with AES-128-GCM in a Web Worker through Insertable Streams (`RTCRtpScriptTransform`).
+The signaling server is Node (Express + Socket.IO) and never sees media. BB84 messages travel on a DataChannel. Frames are encrypted with AES-128-GCM in a Web Worker through Insertable Streams (`RTCRtpScriptTransform`).
 
 ## Protocol
 
@@ -35,11 +35,11 @@ Optical mode runs an optional Python daemon per peer (`bench/`) driving an emula
 
 ## Running it
 
-Needs Python 3.9+, and Node 20+ for the JavaScript tests.
+Needs Node 20+. Python 3.9+ is needed only for the optical bench daemon.
 
 ```bash
-pip install flask flask-cors python-socketio eventlet
-python signaling/main.py
+npm install
+node server/main.js
 ```
 
 The server picks a port unless `QVC_SERVER_REST_PORT` is set. `docker-compose.yml` here builds that one service and nothing else; it reads `QVC_SERVER_PORT` from a `.env` beside it, which has no default, so set it before `docker compose up -d`. The Astro frontend and its `DEV=1` profile live in the website repository's own compose file, not this one.
@@ -58,14 +58,14 @@ python -m bench --config bench-source.toml     # role = "source"
 
 Each daemon prints a one-time pairing token. In the lobby, tick **Use optical bench** and paste the daemon's `ws://` URL and token — the room creator uses the source daemon, the joiner the detector. Optical mode engages only when both peers present complementary benches; otherwise the call falls back to the simulator. `bench/bench.toml.example` lists every setting, with APD and SNSPD presets.
 
-The daemon is asyncio and `websockets`, in its own process. Eventlet's monkey-patching must not reach instrument control, so it shares no code or process with the signaling server.
+The daemon is asyncio and `websockets`, in its own process. It shares no code or process with the signaling server, which is Node.
 
 ## Tests
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest tests/signaling/ tests/bench/ tests/contract/ -v   # server, bench daemon, API contract
-npm install && npm test                   # vitest: crypto, BB84, reservoir, bench, UI
+python -m pytest tests/bench/ -v           # bench daemon
+npm install && npm test                   # vitest: crypto, BB84, reservoir, bench, UI, server, API contract
 npx playwright install chromium
 npm run test:e2e                          # two browser contexts through a real call
 ```

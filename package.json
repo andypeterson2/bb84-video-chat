@@ -5,13 +5,14 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint . && prettier --check 'website/client/static/**/*.js' 'tests/js/**/*.js' 'tests/e2e/**/*.{js,mjs}' vitest.config.js playwright.config.js",
-    "format": "prettier --write 'website/client/static/**/*.js' 'tests/js/**/*.js' 'tests/e2e/**/*.{js,mjs}' vitest.config.js playwright.config.js",
+    "lint": "eslint . && prettier --check 'server/**/*.js' 'website/client/static/**/*.js' 'tests/js/**/*.js' 'tests/server/**/*.js' 'tests/contract/**/*.js' 'tests/e2e/**/*.{js,mjs}' vitest.config.js playwright.config.js",
+    "format": "prettier --write 'server/**/*.js' 'website/client/static/**/*.js' 'tests/js/**/*.js' 'tests/server/**/*.js' 'tests/contract/**/*.js' 'tests/e2e/**/*.{js,mjs}' vitest.config.js playwright.config.js",
     "test:e2e": "playwright test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.50.0",
+    "ajv": "^8.20.0",
     "eslint": "^10.9.1",
     "eslint-plugin-sonarjs": "^4.2.0",
     "globals": "^16.5.0",

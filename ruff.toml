@@ -48,8 +48,6 @@ ignore = [
     "SIM105",  # contextlib.suppress suggestion
     "UP036",   # version block outdated
 ]
-"tests/conftest.py" = ["E402"]
-"signaling/main.py" = ["E402"]      # sys.path before imports
 # The bench package is a physics emulator: numeric literals (fair-coin 0.5,
 # varint 0x80) are the model, not magic constants worth naming, and its RNG
 # is for simulated physics, never secrets.
