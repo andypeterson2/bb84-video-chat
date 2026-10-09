@@ -13,5 +13,5 @@ __pycache__
 logs/
 website/
 notebooks/
-.claude/
+.*/
 requirements-dev.txt
